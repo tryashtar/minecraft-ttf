@@ -1,6 +1,7 @@
 import io
 import requests
 import os
+import sys
 import json
 import datetime
 import zipfile
@@ -13,9 +14,13 @@ import fontTools.ttLib.tables._g_l_y_f
 
 
 def main():
-    latest = get_latest()
-    name = latest['id']
-    meta_url = latest['url']
+    name = sys.argv[1] if len(sys.argv) >= 2 else None
+    version = get_version(name)
+    name = version['id']
+    meta_url = version['url']
+    date = datetime.datetime.fromisoformat(version['releaseTime'])
+    if date < datetime.datetime.fromisoformat('2018-07-10T14:21:42+00:00'):
+        raise ValueError(f'{name} is too early; versions from before 1.13-pre7 are unsupported')
     cached_path = f'cache/minecraft-{name}.jar'
     if not os.path.exists(cached_path):
         print(f'Downloading minecraft jar {name}...')
@@ -32,10 +37,11 @@ def main():
     with zipfile.ZipFile(cached_path, 'r') as jar:
         convert_font('Default', 'assets/minecraft/font/default.json', jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
         convert_font('Enchanting', 'assets/minecraft/font/alt.json', jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn)
-        convert_font('Illager Runes', 'assets/minecraft/font/illageralt.json', jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
+        if date > datetime.datetime.fromisoformat('2021-09-15T16:04:30+00:00'): # 21w37a, when illageralt was added
+            convert_font('Illager Runes', 'assets/minecraft/font/illageralt.json', jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
     print('Done!')
     
-def get_latest() -> dict:
+def get_version(snapshot_id) -> dict:
     cached_path = 'cache/manifest.json'
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
@@ -48,7 +54,8 @@ def get_latest() -> dict:
         os.makedirs('cache', exist_ok=True)
         with open(cached_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
-    snapshot_id = data['latest']['snapshot']
+    if not snapshot_id:
+        snapshot_id = data['latest']['snapshot']
     for version in data['versions']:
         if version['id'] == snapshot_id:
             return version
