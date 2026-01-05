@@ -1,6 +1,7 @@
 import io
 import requests
 import os
+import pathlib
 import json
 import datetime
 import zipfile
@@ -16,27 +17,29 @@ def main():
     latest = get_latest()
     name = latest['id']
     meta_url = latest['url']
-    cached_path = f'cache/minecraft-{name}.jar'
-    if not os.path.exists(cached_path):
+    cached_path = pathlib.Path(f'cache/minecraft-{name}.jar')
+    if not cached_path.exists():
         print(f'Downloading minecraft jar {name}...')
         response = requests.get(meta_url)
         data = response.json()
         client_jar = data['downloads']['client']['url']
         response = requests.get(client_jar)
-        os.makedirs('cache', exist_ok=True)
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cached_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=16 * 1024):
                 f.write(chunk)
     aglfn = get_aglfn()
     print('Converting fonts...')
     with zipfile.ZipFile(cached_path, 'r') as jar:
+        # TTF metadata includes a creation date
+        # this information isn't in the jar, so we have to provide it ourselves
         convert_font('Default', 'assets/minecraft/font/default.json', jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
         convert_font('Enchanting', 'assets/minecraft/font/alt.json', jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn)
         convert_font('Illager Runes', 'assets/minecraft/font/illageralt.json', jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
     print('Done!')
-    
+
 def get_latest() -> dict:
-    cached_path = 'cache/manifest.json'
+    cached_path = pathlib.Path('cache/manifest.json')
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -45,7 +48,7 @@ def get_latest() -> dict:
         manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
         response = requests.get(manifest_url)
         data = response.json()
-        os.makedirs('cache', exist_ok=True)
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cached_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
     snapshot_id = data['latest']['snapshot']
@@ -54,12 +57,13 @@ def get_latest() -> dict:
             return version
     raise ValueError(snapshot_id)
 
+# The Adobe Glyph List For New Fonts tells us what names to use for the glyphs that characters are mapped to
 def get_aglfn() -> dict[str, str]:
-    cached_path = 'cache/aglfn.txt'
-    if not os.path.exists(cached_path):
+    cached_path = pathlib.Path('cache/aglfn.txt')
+    if not cached_path.exists():
         print('Downloading Adobe AGLFN...')
         response = requests.get('https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/refs/heads/master/aglfn.txt')
-        os.makedirs('cache', exist_ok=True)
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cached_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=16 * 1024):
                 f.write(chunk)
@@ -114,9 +118,12 @@ def convert_font(name: str, entry: str, jar: zipfile.ZipFile, created_date: date
     chatbox_height = 12
     font_em = 1200
     pixel_scale = font_em / chatbox_height
+    # font textures have a color depth of 1 bit, so they are just 2D bitmasks
+    # this lets us leverage some efficient operations provided by pygame
     def add_bitmap_glyph(char: str, mask: pygame.mask.Mask, height: int, ascent: int):
         m_width, m_height = mask.get_size()
         seen_chars.add(char)
+        # bold characters are created by overlapping two copies of the texture
         bold_mask = pygame.mask.Mask((m_width + 1, m_height), fill=False)
         bold_mask.draw(mask, (0, 0))
         bold_mask.draw(mask, (1, 0))
@@ -171,8 +178,9 @@ def convert_font(name: str, entry: str, jar: zipfile.ZipFile, created_date: date
         full_name = 'Minecraft ' + name
         ttf_name = full_name.replace(' ', '') + '-' + style.replace(' ', '')
         font = make_font(full_name, style, font_em, (created_date, modified_date), data, aglfn)
-        os.makedirs('out', exist_ok=True)
-        font.save(f'out/{ttf_name}.ttf')
+        dest = pathlib.Path(f'out/{ttf_name}.ttf')
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        font.save(dest)
 
 def make_font(name: str, style: str, font_em: int, dates: tuple[datetime.datetime, datetime.datetime], char_data: dict, aglfn: dict[str, str]) -> fontTools.fontBuilder.FontBuilder:
     nameStrings = dict(
@@ -254,6 +262,8 @@ def is_set(mask: pygame.mask.Mask, point: tuple[int, int]) -> bool:
         return False
     return mask.get_at(point) == 1
 
+# trace the outline of a connected mask
+# returns a list of all corner points that were visited, in order
 def outline(mask: pygame.mask.Mask) -> list[tuple[int, int]]:
     start = start_point(mask)
     facing = 'right'
@@ -321,7 +331,7 @@ def neighbor_connected(mask: pygame.mask.Mask) -> list[pygame.mask.Mask]:
                         pixel_queue.append((px, py + 1))
                     result.append(region)
                 pixels_checked.add(pos)
-    return result 
+    return result
 
 def separate_regions(mask: pygame.mask.Mask) -> tuple[list[pygame.mask.Mask], list[pygame.mask.Mask]]:
     filled = mask.connected_components()
@@ -344,9 +354,9 @@ def collinear(p1: tuple[int, int], p2: tuple[int, int], p3: tuple[int, int]) -> 
 
 def vectorize(mask: pygame.mask.Mask, scale: float, offset: tuple[float, float], italic: bool=False) -> tuple[fontTools.ttLib.tables._g_l_y_f.Glyph | None, tuple[int, int]]:
     ox, oy = offset
+    width, height = mask.get_size()
     pen = fontTools.pens.ttGlyphPen.TTGlyphPen(None)
     pen_pos: dict[str, tuple[int, int] | None] = {'current': None, 'next': None}
-    width, height = mask.get_size()
     def draw_last():
         if pen_pos['next'] is not None:
             x, y = pen_pos['next']
