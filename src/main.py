@@ -7,8 +7,8 @@ import zipfile
 import PIL.Image
 import requests
 
-from bitmap import Bitmap, bitmap_from_image
-from font import CharInfo, FontInfo, make_font, vectorize
+from minecraft_ttf.bitmap import Bitmap, bitmap_from_image
+from minecraft_ttf.font import CharInfo, FontInfo, make_font, vectorize
 
 
 def main():

@@ -1,6 +1,6 @@
 [project]
-name = "font"
-version = "0.1.0"
+name = "minecraft-ttf"
+version = "0.1.1"
 description = "Convert Minecraft fonts to TTFs"
 requires-python = ">=3.13"
 dependencies = [

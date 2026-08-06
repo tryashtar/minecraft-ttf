@@ -5,7 +5,7 @@ import fontTools.fontBuilder
 import fontTools.pens.ttGlyphPen
 import fontTools.ttLib.tables._g_l_y_f
 
-from bitmap import Bitmap, BitmapLabels
+from minecraft_ttf.bitmap import Bitmap, BitmapLabels
 
 
 @dataclasses.dataclass

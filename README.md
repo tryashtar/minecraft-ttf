@@ -21,7 +21,7 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 
 1. [Download and extract the repo](https://github.com/tryashtar/minecraft-ttf/archive/refs/heads/master.zip) or clone it (`git clone https://github.com/tryashtar/minecraft-ttf`)
 2. Install [`uv`](https://docs.astral.sh/uv/#installation)
-3. `uv run main.py`
+3. `uv run src/main.py`
 4. Fonts will be created in the `out` folder
 
 ## Notes
