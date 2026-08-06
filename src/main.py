@@ -8,7 +8,7 @@ import PIL.Image
 import requests
 
 from minecraft_ttf.bitmap import Bitmap, bitmap_from_image
-from minecraft_ttf.font import CharInfo, FontInfo, make_font, vectorize
+from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vectorize
 
 
 def main():
@@ -95,6 +95,7 @@ def date_time(jartime: tuple) -> datetime.datetime:
     return datetime.datetime(y, m, d, h, mm, s, 0, tzinfo=datetime.UTC)
 
 def convert_font(name: str, entry: str, jar: zipfile.ZipFile, created_date: datetime.datetime, aglfn: dict[str, str]):
+    print(f'{name}...')
     modified_date = date_time(jar.getinfo(entry).date_time)
     text = jar.read(entry)
     data = json.loads(text)
@@ -180,7 +181,18 @@ def convert_font(name: str, entry: str, jar: zipfile.ZipFile, created_date: date
             modified = modified_date,
             version = 'Version 1.000'
         )
-        font = make_font(info, data, aglfn)
+        positions = FontPositions(
+           ascent = 9 / 12,
+           descent = 2 / 12,
+           sCapHeight = 7 / 12,
+           sxHeight = 5 / 12,
+           yStrikeoutPosition = 4 / 12,
+           yStrikeoutSize = 1 / 12,
+           underlinePosition = -1 / 12,
+           underlineThickness = 1 / 12,
+           italicAngle = -14.05598
+        )
+        font = make_font(info, positions, data, aglfn)
         dest = pathlib.Path('out') / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
         font.save(dest)

@@ -15,6 +15,18 @@ class CharInfo:
     path: fontTools.pens.ttGlyphPen.Glyph | None
 
 @dataclasses.dataclass
+class FontPositions:
+    ascent: float
+    descent: float
+    sCapHeight: float
+    sxHeight: float
+    yStrikeoutPosition: float
+    yStrikeoutSize: float
+    underlinePosition: float
+    underlineThickness: float
+    italicAngle: float
+
+@dataclasses.dataclass
 class FontInfo:
     name: str
     style: str
@@ -25,7 +37,7 @@ class FontInfo:
     created: datetime.datetime
     modified: datetime.datetime
 
-def make_font(info: FontInfo, char_data: dict[str, CharInfo], aglfn: dict[str, str]) -> fontTools.fontBuilder.FontBuilder:
+def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, CharInfo], aglfn: dict[str, str]) -> fontTools.fontBuilder.FontBuilder:
     nameStrings = {
         'copyright': info.copyright,
         'familyName': info.name,
@@ -65,8 +77,8 @@ def make_font(info: FontInfo, char_data: dict[str, CharInfo], aglfn: dict[str, s
     for gn, advanceWidth in char_widths.items():
         metrics[gn] = (advanceWidth, glyphTable[gn].xMin)
     font.setupHorizontalMetrics(metrics)
-    ascent = info.em * 9 // 12
-    descent = info.em * 2 // 12
+    ascent = int(info.em * positions.ascent)
+    descent = int(info.em * positions.descent)
     font.setupHorizontalHeader(ascent=ascent, descent=-descent)
     font.setupNameTable(nameStrings)
     fs_selection = 0
@@ -86,17 +98,20 @@ def make_font(info: FontInfo, char_data: dict[str, CharInfo], aglfn: dict[str, s
         sTypoDescender = -descent,
         usWinAscent = ascent,
         usWinDescent = descent,
-        sCapHeight = info.em * 7 // 12,
-        sxHeight = info.em * 5 // 12,
-        yStrikeoutPosition = info.em * 4 // 12,
-        yStrikeoutSize = info.em * 1 // 12,
+        sCapHeight = int(info.em * positions.sCapHeight),
+        sxHeight = int(info.em * positions.sxHeight),
+        yStrikeoutPosition = int(info.em * positions.yStrikeoutPosition),
+        yStrikeoutSize = int(info.em * positions.yStrikeoutSize),
         sTypoLineGap = 0,
         fsSelection = fs_selection,
         achVendID = '',
         usWeightClass = weight
     )
-    italic_angle = 14.05598 if 'Italic' in info.style else 0
-    font.setupPost(underlinePosition = -info.em * 1 // 12, underlineThickness = info.em * 1 // 12, italicAngle = -italic_angle)
+    font.setupPost(
+       underlinePosition = int(info.em * positions.underlinePosition),
+       underlineThickness = int(info.em * positions.underlineThickness),
+       italicAngle = positions.italicAngle if 'Italic' in info.style else 0
+    )
     epoch = datetime.datetime.fromisoformat('1904-01-01T00:00:00Z')
     font.updateHead(
         xMin = 0,
