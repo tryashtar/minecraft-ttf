@@ -39,7 +39,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return '22w11a+'
     if 'assets/minecraft/font/default.json' in names:
         return '1.13-pre7+'
-    if 'font.txt' not in names and 'pack.png' in names:
+    if 'font.txt' not in names and 'assets/minecraft/textures/font/ascii.png' in names:
         # this wrongly includes 13w42a (which removed font.txt)
         # but no easy way to distinguish the two versions
         return '13w42b+'
@@ -85,8 +85,8 @@ def get_providers(jar: zipfile.ZipFile, version: MinecraftVersion, identifier: s
                 '0123456789:;<=>?',
                 '@ABCDEFGHIJKLMNO',
                 'PQRSTUVWXYZ[\\]^_',
-                '`abcdefghijklmnop',
-                'qrstuvwxyz{|}~\u0000',
+                '`abcdefghijklmno',
+                'pqrstuvwxyz{|}~\u0000',
                 '\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5',
                 '\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192',
                 '\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb',
@@ -109,7 +109,7 @@ def get_providers(jar: zipfile.ZipFile, version: MinecraftVersion, identifier: s
         case '13w24a+' | 'b1.1+':
             # characters come from font.txt
             font, date = read_font_txt(jar, 'font.txt')
-            empty = '\u0000' * 8
+            empty = '\u0000' * 16
             chars: list[str] = [
                empty,
                empty,
@@ -151,11 +151,12 @@ def get_providers(jar: zipfile.ZipFile, version: MinecraftVersion, identifier: s
                 '\u00c2\u00ba\u00c2\u00bf\u00c2\u00ae\u00c2\u00ac\u00c2\u00bd\u00c2\u00bc\u00c2\u00a1\u00c2\u00ab',
                 '\u00c2\u00bb' + ('\u0000' * 14)
             ]
-            empty = '\u0000' * 8
+            empty = '\u0000' * 16
             full_chars: list[str] = [
                empty,
                empty,
                *chars,
+               empty,
                empty,
                empty,
             ]
@@ -178,7 +179,7 @@ def get_providers(jar: zipfile.ZipFile, version: MinecraftVersion, identifier: s
                 '\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192',
                 '\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb',
             ]
-            empty = '\u0000' * 8
+            empty = '\u0000' * 16
             full_chars: list[str] = [
                empty,
                empty,
@@ -202,7 +203,7 @@ def get_providers(jar: zipfile.ZipFile, version: MinecraftVersion, identifier: s
         case 'c0.0.17a+' | 'c0.0.11a+':
             # all characters on sheet
             chars: list[str] = [
-                ''.join(chr(x) for x in range(y, y + 16)) for y in range(16)
+                ''.join(chr(x) for x in range(y * 16, (y + 1) * 16)) for y in range(16)
             ]
             if version == 'c0.0.17a+':
                 default = 'default.png'

@@ -17,6 +17,9 @@ def main():
         version = get_version(manifest, manifest['latest']['snapshot'])
     else:
         version = get_version(manifest, sys.argv[1])
+    if version is None:
+        print(f'Version {sys.argv[1]} not found in manifest')
+        return
     jar_path = get_jar(version['id'], version['url'])
     aglfn = get_aglfn()
     print('Converting fonts...')
@@ -25,6 +28,7 @@ def main():
         if version is None:
             print('Unable to determine capabilities of jar!')
             return
+        print(f'Detected font capabilities: {version}')
         # TTF metadata includes a creation date
         # this information isn't in the jar, so we have to provide it ourselves
         convert_font('Default', 'minecraft:default', version, jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
@@ -45,11 +49,11 @@ def get_jar(version_id: str, meta_url: str) -> pathlib.Path:
             f.writelines(response.iter_content(chunk_size=16 * 1024))
     return cached_path
 
-def get_version(manifest: dict, version_id: str) -> dict:
+def get_version(manifest: dict, version_id: str) -> dict | None:
     for version in manifest['versions']:
         if version['id'] == version_id:
             return version
-    raise ValueError(version_id)
+    return None
 
 def get_manifest() -> dict:
     cached_path = pathlib.Path('cache') / 'manifest.json'
@@ -87,10 +91,10 @@ def get_aglfn() -> dict[str, str]:
     return aglfn_map
 
 def convert_font(name: str, identifier: str, version: providers.MinecraftVersion, jar: zipfile.ZipFile, created_date: datetime.datetime, aglfn: dict[str, str]):
-    print(f'{name}...')
     provider_list = providers.get_providers(jar, version, identifier)
     if provider_list is None:
        return
+    print(f'{name}...')
     modified_date = created_date
     seen_chars: set[str] = set()
     fonts: dict[str, dict[str, CharInfo]] = {'Regular': {}, 'Bold': {}, 'Italic': {}, 'Bold Italic': {}}
