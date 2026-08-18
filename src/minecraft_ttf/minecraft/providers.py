@@ -16,7 +16,8 @@ class BitmapProvider:
     height: int
     ascent: int
     image: PIL.Image.Image
-    chars: list[str]
+    chars: list[list[str | None]]
+    sizes: dict[str, tuple[int, int]] | None
     modified_date: datetime.datetime | None
 
 @dataclasses.dataclass
@@ -25,6 +26,9 @@ class SpaceProvider:
     modified_date: datetime.datetime | None
 
 Provider = BitmapProvider | SpaceProvider
+
+def filter_nul(chars: list[str]) -> list[list[str | None]]:
+    return [[None if y == '\u0000' else y for y in x] for x in chars]
 
 def get_providers(store: Storage, version: MinecraftVersion, identifier: str) -> list[Provider] | None:
     if version.supports_providers:
@@ -57,7 +61,7 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
                 empty
             ]
             date = date_max([img_data.modified_date, font_data.modified_date])
-        bitmap = BitmapProvider(height=8, ascent=7, image=img_data.data, chars=chars, sizes=None, modified_date=date)
+        bitmap = BitmapProvider(height=8, ascent=7, image=img_data.data, chars=filter_nul(chars), sizes=None, modified_date=date)
         providers.append(bitmap)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
@@ -81,9 +85,31 @@ JsonReferenceProvider = typing.TypedDict('JsonReferenceProvider', {
     'id': str,
 })
 
-JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider
+JsonLegacyUnicodeProvider = typing.TypedDict('JsonLegacyUnicodeProvider', {
+    'type': typing.Literal['legacy_unicode'],
+    'sizes': str,
+    'template': str,
+})
 
-def read_image(store: Storage, entry: pathlib.PurePath) -> tuple[PIL.Image.Image, datetime.datetime]:
+UnihexSizeOverride = typing.TypedDict('UnihexSizeOverride', {
+    'from': str,
+    'to': str,
+    'left': int,
+    'right': int,
+})
+
+JsonUnihexProvider = typing.TypedDict('JsonUnihexProvider', {
+    'type': typing.Literal['unihex'],
+    'hex_file': str,
+    'size_overrides': typing.NotRequired[list[UnihexSizeOverride]],
+})
+
+JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider | JsonLegacyUnicodeProvider | JsonUnihexProvider
+
+JsonRootProvider = typing.TypedDict('JsonRootProvider', {
+    'providers': list[JsonProvider]
+})
+
 @dataclasses.dataclass
 class ReadEntry[T]:
     data: T
@@ -115,13 +141,16 @@ def read_font_txt(store: Storage, entry: pathlib.PurePath) -> ReadEntry[list[str
     lines: list[str] = [x for x in text.split('\n') if not x.startswith('#')]
     return ReadEntry(lines, store.modified_time(entry))
 
-def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> pathlib.PurePath:
+def identifier_to_entry(identifier: str, kind: str | None, suffix: str | None) -> pathlib.PurePath:
     if ':' not in identifier:
         namespace = 'minecraft'
         rest = identifier
     else:
         namespace, rest = identifier.split(':',  maxsplit=1)
-    path = f'assets/{namespace}/{kind}/{rest}'
+    path = f'assets/{namespace}'
+    if kind is not None:
+        path = f'{path}/{kind}'
+    path = f'{path}/{rest}'
     if suffix is not None:
         path += f'.{suffix}'
     return pathlib.PurePath(path)
@@ -147,8 +176,8 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                    height=provider.get('height', 8),
                    ascent=provider['ascent'],
                    image=img_data.data,
-                   chars=provider['chars'],
-                   modified_date=max(modified_date, img_date)
+                   chars=filter_nul(provider['chars']),
+                   sizes=None,
                    modified_date=date_max([modified_date, img_data.modified_date])
                )
                result.append(full)
@@ -163,6 +192,30 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                font_data = read_font_definition(store, entry)
                converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]))
                result.extend(converted)
+           case 'legacy_unicode':
+               size_entry = identifier_to_entry(provider['sizes'], kind=None, suffix=None)
+               size_date = store.modified_time(size_entry)
+               size_bytes = store.read(size_entry)
+               for sheet_id in range(0xff + 1):
+                   sheet_entry = identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None)
+                   if store.exists(sheet_entry):
+                       char_offset = sheet_id * 256
+                       chars = [[chr(x) if size_bytes[x] > 0 and x < 0xffff else None for x in range(char_offset + y * 16, char_offset + y * 16 + 16)] for y in range(16)]
+                       size_range = size_bytes[char_offset:char_offset + 256]
+                       sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf) for i, x in enumerate(size_range) if x > 0}
+                       img_data = read_image(store, sheet_entry)
+                       full = BitmapProvider(
+                           height=8,
+                           ascent=7,
+                           image=img_data.data,
+                           chars=chars,
+                           sizes=sizes,
+                           modified_date=date_max([modified_date, size_date, img_data.modified_date])
+                       )
+                       result.append(full)
+               provider['template']
+           case 'unihex':
+               pass
    return result
 
 def load_providers(store: Storage, entry: pathlib.PurePath) -> list[Provider]:

@@ -233,8 +233,8 @@ def collinear(p1: tuple[int, int], p2: tuple[int, int], p3: tuple[int, int]) -> 
     x2, y2 = p3[0] - p1[0], p3[1] - p1[1]
     return abs(x1 * y2 - x2 * y1) < 1e-12
 
-def vectorize(mask: Bitmap, scale: float, offset: tuple[float, float], italic: bool=False) -> tuple[fontTools.ttLib.tables._g_l_y_f.Glyph | None, tuple[int, int]]:
-    ox, oy = offset
+def vectorize(mask: Bitmap, scale: float, step_size: tuple[float, float], italic: bool=False) -> tuple[fontTools.ttLib.tables._g_l_y_f.Glyph | None, tuple[int, int]]:
+    ox, oy = step_size
     _width, height = mask.get_size()
     pen = fontTools.pens.ttGlyphPen.TTGlyphPen(None)
     @dataclasses.dataclass
