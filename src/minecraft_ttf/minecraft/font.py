@@ -7,7 +7,12 @@ import fontTools.ttLib.tables._g_l_y_f
 
 from minecraft_ttf.bitmap import Bitmap, bitmap_from_image
 from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vectorize
-from minecraft_ttf.minecraft.providers import BitmapProvider, Provider, SpaceProvider
+from minecraft_ttf.minecraft.providers import (
+    BitmapProvider,
+    ImageProvider,
+    Provider,
+    SpaceProvider,
+)
 
 STYLES = typing.Literal['regular', 'italic', 'bold', 'bold_italic']
 
@@ -102,6 +107,11 @@ def create_fonts(
                     continue
                 add_space_glyph(char, max(0, width))
         elif isinstance(provider, BitmapProvider):
+            for char, (bitmap, size) in provider.chars.items():
+                if char in seen_chars:
+                    continue
+                add_bitmap_glyph(char, bitmap, height=provider.height, ascent=provider.ascent, char_size=size)
+        elif isinstance(provider, ImageProvider):
             glyph_width = provider.image.width // len(provider.chars[0])
             glyph_height = provider.image.height // len(provider.chars)
             for y, row in enumerate(provider.chars):

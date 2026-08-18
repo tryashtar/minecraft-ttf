@@ -7,12 +7,13 @@ import typing
 
 import PIL.Image
 
+from minecraft_ttf.bitmap import Bitmap
 from minecraft_ttf.minecraft.storage import StackStorage, Storage
 from minecraft_ttf.minecraft.versions import MinecraftVersion
 
 
 @dataclasses.dataclass
-class BitmapProvider:
+class ImageProvider:
     height: int
     ascent: int
     image: PIL.Image.Image
@@ -21,11 +22,18 @@ class BitmapProvider:
     modified_date: datetime.datetime | None
 
 @dataclasses.dataclass
+class BitmapProvider:
+    height: int
+    ascent: int
+    chars: dict[str, tuple[Bitmap, tuple[int, int]]]
+    modified_date: datetime.datetime | None
+
+@dataclasses.dataclass
 class SpaceProvider:
     spaces: dict[str, int]
     modified_date: datetime.datetime | None
 
-Provider = BitmapProvider | SpaceProvider
+Provider = BitmapProvider | ImageProvider | SpaceProvider
 
 def filter_nul(chars: list[str]) -> list[list[str | None]]:
     return [[None if y == '\u0000' else y for y in x] for x in chars]
@@ -47,8 +55,8 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
             chars = version.hardcoded_chars
             date = img_data.modified_date
         else:
-            assert version.lookup_chars
-            font_data = read_font_txt(store, pathlib.PurePath('font.txt'))
+            assert version.lookup_chars is not None
+            font_data = read_font_txt(store, version.lookup_chars)
             empty = '\u0000' * 16
             chars: list[str] = [
                 empty,
@@ -61,7 +69,7 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
                 empty
             ]
             date = date_max([img_data.modified_date, font_data.modified_date])
-        bitmap = BitmapProvider(height=8, ascent=7, image=img_data.data, chars=filter_nul(chars), sizes=None, modified_date=date)
+        bitmap = ImageProvider(height=8, ascent=7, image=img_data.data, chars=filter_nul(chars), sizes=None, modified_date=date)
         providers.append(bitmap)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
@@ -69,7 +77,7 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
         sheet_template, size_entry = version.hardcoded_unifont
         size_date = store.modified_time(size_entry)
         size_bytes = store.read(size_entry)
-        sheet_entries = [pathlib.PurePath(sheet_template.replace('%s', f'{sheet_id:02x}')) for sheet_id in range(0xff + 1)]
+        sheet_entries = [pathlib.PurePath(sheet_template.replace('%x', f'{sheet_id:02x}').replace('%X', f'{sheet_id:02X}')) for sheet_id in range(0xff + 1)]
         converted = legacy_unicode(store, sheet_entries, size_bytes, size_date)
         providers.extend(converted)
     return providers
@@ -189,7 +197,7 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
             case 'bitmap':
                 img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
                 img_data = read_image(store, img_entry)
-                full = BitmapProvider(
+                full = ImageProvider(
                     height=provider.get('height', 8),
                     ascent=provider['ascent'],
                     image=img_data.data,
@@ -220,8 +228,8 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                 pass
     return result
 
-def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, modified_date: datetime.datetime | None) -> list[BitmapProvider]:
-    result: list[BitmapProvider] = []
+def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, modified_date: datetime.datetime | None) -> list[ImageProvider]:
+    result: list[ImageProvider] = []
     for sheet_id, sheet_entry in enumerate(sheets):
         if store.exists(sheet_entry):
             char_offset = sheet_id * 256
@@ -229,7 +237,7 @@ def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: b
             size_range = size_bytes[char_offset:char_offset + 256]
             sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf) for i, x in enumerate(size_range) if x > 0}
             img_data = read_image(store, sheet_entry)
-            full = BitmapProvider(
+            full = ImageProvider(
                 height=8,
                 ascent=7,
                 image=img_data.data,
