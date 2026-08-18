@@ -50,7 +50,7 @@ class ZipStorage(Storage):
     @typing.override
     def get_entries(self, prefix: pathlib.PurePath) -> list[pathlib.PurePath]:
         result: list[pathlib.PurePath] = []
-        prefix_str = str(prefix) + '/'
+        prefix_str = prefix.as_posix() + '/'
         for entry in self.names:
             if entry.startswith(prefix_str):
                 result.append(pathlib.PurePath(entry))
@@ -58,15 +58,15 @@ class ZipStorage(Storage):
 
     @typing.override
     def read(self, entry: pathlib.PurePath) -> bytes:
-        return self.zip.read(str(entry))
+        return self.zip.read(entry.as_posix())
 
     @typing.override
     def exists(self, entry: pathlib.PurePath) -> bool:
-        return str(entry) in self.names
+        return entry.as_posix() in self.names
 
     @typing.override
     def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime:
-        stats = self.zip.getinfo(str(entry))
+        stats = self.zip.getinfo(entry.as_posix())
         time = jar_time(stats.date_time)
         return time
 

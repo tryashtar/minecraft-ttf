@@ -30,6 +30,8 @@ class FontPositions:
 class FontInfo:
     name: str
     style: str
+    bold: bool
+    italic: bool
     copyright: str
     sample: str
     version: str
@@ -84,14 +86,14 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
     fs_selection = 0
     mac_style = 0
     weight = 400
-    if 'Bold' in info.style:
+    if info.bold:
         mac_style += 1
         fs_selection += 32
         weight = 700
-    if 'Italic' in info.style:
+    if info.italic:
         mac_style += 2
         fs_selection += 1
-    if 'Bold' not in info.style and 'Italic' not in info.style:
+    if not info.bold and not info.italic:
         fs_selection += 64
     font.setupOS2(
         sTypoAscender = ascent,
@@ -110,7 +112,7 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
     font.setupPost(
        underlinePosition = int(info.em * positions.underlinePosition),
        underlineThickness = int(info.em * positions.underlineThickness),
-       italicAngle = positions.italicAngle if 'Italic' in info.style else 0
+       italicAngle = positions.italicAngle if info.italic else 0
     )
     epoch = datetime.datetime.fromisoformat('1904-01-01T00:00:00Z')
     font.updateHead(

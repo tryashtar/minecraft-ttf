@@ -6,6 +6,6 @@ requires-python = ">=3.13"
 dependencies = [
     "bitarray>=3.10.0",
     "fonttools>=4.58.1",
-    "pillow>=11.2.1",
+    "pillow>=12.3.0",
     "requests>=2.32.3",
 ]
