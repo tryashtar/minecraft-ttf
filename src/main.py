@@ -27,11 +27,10 @@ def main():
     vanilla = commands.add_parser('vanilla', help='Generate TTF fonts from the vanilla game jar')
     vanilla_action = vanilla.add_subparsers(dest='action', required=True, help='Which operation to perform')    
     vanilla_generate = vanilla_action.add_parser('generate', help='Generate TTF fonts from a specific version')
+    vanilla_generate.add_argument('version', type=str, help='Name of the Minecraft version to download, or "latest"')
     vanilla_history = vanilla_action.add_parser('history', help='Generate all unique TTF fonts across Minecraft\'s history')
     vanilla_history.add_argument('--start', type=str, help='First version to scan')
     vanilla_history.add_argument('--end', type=str, help='Last version to scan')
-    vanilla_generate.add_argument('version', type=str, help='Name of the Minecraft version to download, or "latest"')
-    vanilla.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(DEFAULT_IDENTIFIERS), choices=typing.get_args(DEFAULT_IDENTIFIERS), help='Identifiers of the font definitions to generate fonts from')
     pack = commands.add_parser('pack', help='List or generate fonts from a resource pack')
     pack_action = pack.add_subparsers(dest='action', required=True, help='Which operation to perform')
     pack_list = pack_action.add_parser('list', help='List available font identifiers')
@@ -39,9 +38,11 @@ def main():
     for entry in (pack_generate, pack_list):
         entry.add_argument('version', type=str, help='Name of the Minecraft version the resource pack is targeting, or "latest"')
         entry.add_argument('location', type=pathlib.Path, help='Path to the resource pack folder or zip file')
-    for entry in (vanilla, pack_generate):
-        entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save generated fonts to')
-        entry.add_argument('--styles', type=str, nargs='*', default=['regular'], choices=typing.get_args(STYLES), help='Styles to generate')
+    for entry in (vanilla_generate, vanilla_history, pack_generate):
+        entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
+        entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLES), choices=typing.get_args(STYLES), help='Styles to generate')
+    for entry in (vanilla_generate, vanilla_history):
+        entry.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(DEFAULT_IDENTIFIERS), choices=typing.get_args(DEFAULT_IDENTIFIERS), help='Identifiers of the font definitions to generate fonts from')
     pack_generate.add_argument('identifier', type=str, help='Identifier of the font definition to use, e.g. "minecraft:default"')
     pack_generate.add_argument('name', type=str, help='Display name for the generated TTF font')
     args = parser.parse_args()
