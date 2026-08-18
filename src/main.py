@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -12,6 +13,8 @@ from minecraft_ttf.font import CharInfo
 from minecraft_ttf.minecraft.font import STYLES, create_fonts, finalize_font, style_info
 from minecraft_ttf.minecraft.providers import get_providers
 from minecraft_ttf.minecraft.storage import (
+    AssetSource,
+    AssetStorage,
     StackStorage,
     Storage,
     ZipStorage,
@@ -23,7 +26,6 @@ from minecraft_ttf.minecraft.versions import MinecraftVersion, detect_version
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest='command', required=True, help='Which operation to perform')
-    parser.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'), help='Folder for cache files')
     vanilla = commands.add_parser('vanilla', help='Generate TTF fonts from the vanilla game jar')
     vanilla_action = vanilla.add_subparsers(dest='action', required=True, help='Which operation to perform')    
     vanilla_generate = vanilla_action.add_parser('generate', help='Generate TTF fonts from a specific version')
@@ -38,13 +40,16 @@ def main():
     for entry in (pack_generate, pack_list):
         entry.add_argument('version', type=str, help='Name of the Minecraft version the resource pack is targeting, or "latest"')
         entry.add_argument('location', type=pathlib.Path, help='Path to the resource pack folder or zip file')
-    for entry in (vanilla_generate, vanilla_history, pack_generate):
-        entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
-        entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLES), choices=typing.get_args(STYLES), help='Styles to generate')
-    for entry in (vanilla_generate, vanilla_history):
-        entry.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(DEFAULT_IDENTIFIERS), choices=typing.get_args(DEFAULT_IDENTIFIERS), help='Identifiers of the font definitions to generate fonts from')
     pack_generate.add_argument('identifier', type=str, help='Identifier of the font definition to use, e.g. "minecraft:default"')
     pack_generate.add_argument('name', type=str, help='Display name for the generated TTF font')
+    for entry in (vanilla_generate, vanilla_history):
+        entry.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(DEFAULT_IDENTIFIERS), choices=typing.get_args(DEFAULT_IDENTIFIERS), help='Identifiers of the font definitions to generate fonts from')
+    for entry in (vanilla_generate, vanilla_history, pack_generate):
+        entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLES), choices=typing.get_args(STYLES), help='Styles to generate')
+    for entry in (vanilla_generate, vanilla_history, pack_generate):
+        entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
+    for entry in (vanilla_generate, vanilla_history, pack_generate, pack_list):
+        entry.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'), help='Folder for cache files')
     args = parser.parse_args()
     match args.command:
         case 'vanilla':
@@ -76,18 +81,19 @@ def default_font_info(identifier: DEFAULT_IDENTIFIERS) -> tuple[str, datetime.da
     return cache[identifier]
 
 def main_vanilla_generate(version_id: str, identifiers: set[DEFAULT_IDENTIFIERS], styles: set[STYLES], output: pathlib.Path, cache: pathlib.Path):
-    result = jar_and_version(version_id, cache)
-    if result is None:
+    info = jar_info(version_id, cache)
+    if info is None:
         return
-    jar, version_data, version = result
-    print(f'Detected font capabilities: {version.name}')
+    print(f'Detected font capabilities: {info.version.name}')
     aglfn = get_aglfn(cache)
-    print(f'Converting fonts from Minecraft {version_data['id']}')
-    with jar:
-        store = ZipStorage(jar)
+    print(f'Converting fonts from Minecraft {info.manifest['id']}')
+    with info.jar:
+        jar_storage = ZipStorage(info.jar)
+        asset_storage = AssetStorage('https://resources.download.minecraft.net', pathlib.PurePath('assets'), info.assets)
+        store = StackStorage([jar_storage, asset_storage])
         for identifier in identifiers:
             name, date = default_font_info(identifier)
-            vanilla_try_font(name, identifier, version, store, date, styles, aglfn, output)
+            vanilla_try_font(name, identifier, info.version, store, date, styles, aglfn, output)
     print('Done!')
 
 def font_digest(font: dict[str, CharInfo]) -> str:
@@ -109,7 +115,8 @@ def main_vanilla_history(start: str | None, end: str | None, identifiers: set[DE
             reached_start = True
         if not reached_start:
             continue
-        jar_path = get_jar(version_data['id'], version_data['url'], cache)
+        launcher_data = get_launcher_json(version_data['id'], version_data['url'], cache)
+        jar_path = get_jar(version_data['id'], launcher_data, cache)
         jar = zipfile.ZipFile(jar_path, 'r')
         version = detect_version(jar)
         if version is None:
@@ -158,7 +165,47 @@ def vanilla_try_font(
         dest.parent.mkdir(parents=True, exist_ok=True)
         ttf.save(dest)
 
-def jar_and_version(version_id: str, cache: pathlib.Path) -> tuple[zipfile.ZipFile, dict, MinecraftVersion] | None:
+ManifestLatest = typing.TypedDict('ManifestLatest', {
+    'release': str,
+    'snapshot': str
+})
+
+ManifestVersion = typing.TypedDict('ManifestVersion', {
+    'id': str,
+    'url': str
+})
+
+Manifest = typing.TypedDict('Manifest', {
+    'latest': ManifestLatest,
+    'versions': list[ManifestVersion]
+})
+
+LauncherDownload = typing.TypedDict('LauncherDownload', {
+    'url': str
+})
+
+LauncherDownloads = typing.TypedDict('LauncherDownloads', {
+    'client': LauncherDownload
+})
+
+LauncherAssets = typing.TypedDict('LauncherAssets', {
+    'id': str,
+    'url': str,
+})
+
+LauncherData = typing.TypedDict('LauncherData', {
+    'downloads': LauncherDownloads,
+    'assetIndex': LauncherAssets,
+})
+
+@dataclasses.dataclass
+class JarInformation:
+    jar: zipfile.ZipFile
+    manifest: ManifestVersion
+    assets: AssetSource
+    version: MinecraftVersion
+
+def jar_info(version_id: str, cache: pathlib.Path) -> JarInformation | None:
     manifest = get_manifest(cache)
     if version_id == 'latest':
         version_data = get_version(manifest, manifest['latest']['snapshot'])
@@ -167,28 +214,30 @@ def jar_and_version(version_id: str, cache: pathlib.Path) -> tuple[zipfile.ZipFi
     if version_data is None:
         print(f'Version {version_id} not found in manifest')
         return None
-    jar_path = get_jar(version_data['id'], version_data['url'], cache)
+    launcher_data = get_launcher_json(version_data['id'], version_data['url'], cache)
+    assets = get_asset_source(launcher_data, cache)
+    jar_path = get_jar(version_data['id'], launcher_data, cache)
     zip = zipfile.ZipFile(jar_path, 'r')
     version = detect_version(zip)
     if version is None:
         print('Unable to determine capabilities of jar!')
         return None
-    return (zip, version_data, version)
+    return JarInformation(zip, version_data, assets, version)
 
 def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path):
     pack_storage = get_storage(location)
     if pack_storage is None:
         print(f'No resource pack at {location}')
         return
-    result = jar_and_version(version_id, cache)
-    if result is None:
+    info = jar_info(version_id, cache)
+    if info is None:
         return
-    jar, version_data, version = result
-    print(f'Available font identifiers in resource pack {location.name} on Minecraft {version_data['id']}:')
-    with jar:
-        jar_storage = ZipStorage(jar)
-        store = StackStorage([jar_storage, pack_storage])
-        identifiers = available_identifiers(version, store)
+    print(f'Available font identifiers in resource pack {location.name} on Minecraft {info.manifest['id']}:')
+    with info.jar:
+        jar_storage = ZipStorage(info.jar)
+        asset_storage = AssetStorage('https://resources.download.minecraft.net', pathlib.PurePath('assets'), info.assets)
+        store = StackStorage([jar_storage, asset_storage, pack_storage])
+        identifiers = available_identifiers(info.version, store)
     for identifier in identifiers:
         print(identifier)
 
@@ -214,21 +263,21 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
     if pack_storage is None:
         print(f'No resource pack at {location}')
         return
-    result = jar_and_version(version_id, cache)
-    if result is None:
+    info = jar_info(version_id, cache)
+    if info is None:
         return
-    jar, version_data, version = result
     aglfn = get_aglfn(cache)
-    print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {version_data['id']}')
-    with jar:
-        jar_storage = ZipStorage(jar)
-        store = StackStorage([jar_storage, pack_storage])
-        provider_list = get_providers(store, version, identifier)
+    print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {info.manifest['id']}')
+    with info.jar:
+        jar_storage = ZipStorage(info.jar)
+        asset_storage = AssetStorage('https://resources.download.minecraft.net', pathlib.PurePath('assets'), info.assets)
+        store = StackStorage([jar_storage, asset_storage, pack_storage])
+        provider_list = get_providers(store, info.version, identifier)
         if provider_list is None:
             print(f'No font with ID {identifier} in jar or resource pack')
             return
         created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
-        fonts = create_fonts(provider_list, version.supports_providers, created_date, styles)
+        fonts = create_fonts(provider_list, info.version.supports_providers, created_date, styles)
         for style, font in fonts.fonts.items():
             ttf = finalize_font(name, style, font, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
             ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
@@ -236,26 +285,55 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
             dest.parent.mkdir(parents=True, exist_ok=True)
             ttf.save(dest)
 
-def get_jar(version_id: str, meta_url: str, cache: pathlib.Path) -> pathlib.Path:
+def get_launcher_json(version_id: str, meta_url: str, cache: pathlib.Path) -> LauncherData:
+    cached_path = cache / f'minecraft-{version_id}.json'
+    try:
+        with open(cached_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f'Downloading Minecraft launcher data {version_id}')
+        response = requests.get(meta_url)
+        response.raise_for_status()
+        data = response.json()
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cached_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    return data
+
+def get_asset_source(launcher_data: LauncherData, cache: pathlib.Path) -> AssetSource:
+    cached_path = cache / f'assets-{launcher_data['assetIndex']['id']}.json'
+    try:
+        with open(cached_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f'Downloading Minecraft assets {launcher_data['assetIndex']['id']}')
+        response = requests.get(launcher_data['assetIndex']['url'])
+        response.raise_for_status()
+        data = response.json()
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cached_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    return data
+
+def get_jar(version_id: str, launcher_data: LauncherData, cache: pathlib.Path) -> pathlib.Path:
     cached_path = cache / f'minecraft-{version_id}.jar'
     if not cached_path.exists():
         print(f'Downloading Minecraft jar {version_id}')
-        response = requests.get(meta_url)
-        data = response.json()
-        client_jar = data['downloads']['client']['url']
+        client_jar = launcher_data['downloads']['client']['url']
         response = requests.get(client_jar)
+        response.raise_for_status()
         cached_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cached_path, 'wb') as f:
             f.writelines(response.iter_content(chunk_size=16 * 1024))
     return cached_path
 
-def get_version(manifest: dict, version_id: str) -> dict | None:
+def get_version(manifest: Manifest, version_id: str) -> ManifestVersion | None:
     for version in manifest['versions']:
         if version['id'] == version_id:
             return version
     return None
 
-def get_manifest(cache: pathlib.Path) -> dict:
+def get_manifest(cache: pathlib.Path) -> Manifest:
     cached_path = cache / 'manifest.json'
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
@@ -264,6 +342,7 @@ def get_manifest(cache: pathlib.Path) -> dict:
         print('Downloading version manifest')
         manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
         response = requests.get(manifest_url)
+        response.raise_for_status()
         data = response.json()
         cached_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cached_path, 'w', encoding='utf-8') as f:

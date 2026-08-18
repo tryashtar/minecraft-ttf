@@ -38,26 +38,26 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
         if identifier not in version.entry_map:
             return None
         img_entry = version.entry_map[identifier]
-        img, img_date = read_image(store, img_entry)
+        img_data = read_image(store, img_entry)
         if version.hardcoded_chars is not None:
             chars = version.hardcoded_chars
-            date = img_date
+            date = img_data.modified_date
         else:
             assert version.lookup_chars
-            font, font_date = read_font_txt(store, pathlib.PurePath('font.txt'))
+            font_data = read_font_txt(store, pathlib.PurePath('font.txt'))
             empty = '\u0000' * 16
             chars: list[str] = [
                 empty,
                 empty,
-                *font,
+                *font_data.data,
                 empty,
                 empty,
                 empty,
                 empty,
                 empty
             ]
-            date = max(img_date, font_date)
-        bitmap = BitmapProvider(height=8, ascent=7, image=img, chars=chars, modified_date=date)
+            date = date_max([img_data.modified_date, font_data.modified_date])
+        bitmap = BitmapProvider(height=8, ascent=7, image=img_data.data, chars=chars, sizes=None, modified_date=date)
         providers.append(bitmap)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
@@ -84,30 +84,36 @@ JsonReferenceProvider = typing.TypedDict('JsonReferenceProvider', {
 JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider
 
 def read_image(store: Storage, entry: pathlib.PurePath) -> tuple[PIL.Image.Image, datetime.datetime]:
+@dataclasses.dataclass
+class ReadEntry[T]:
+    data: T
+    modified_date: datetime.datetime | None
+
+def read_image(store: Storage, entry: pathlib.PurePath) -> ReadEntry[PIL.Image.Image]:
     data = store.read(entry)
     img = PIL.Image.open(io.BytesIO(data))
-    return (img, store.modified_time(entry))
+    return ReadEntry(img, store.modified_time(entry))
 
-def read_json(store: Storage, entry: pathlib.PurePath) -> tuple[dict[str, typing.Any], datetime.datetime]:
+def read_json(store: Storage, entry: pathlib.PurePath) -> ReadEntry:
     text = store.read(entry)
     data = json.loads(text)
-    return (data, store.modified_time(entry))
+    return ReadEntry(data, store.modified_time(entry))
 
-def read_font_definition(store: Storage, entry: pathlib.PurePath) -> tuple[list[JsonProvider], datetime.datetime]:
+def read_font_definition(store: Storage, entry: pathlib.PurePath) -> ReadEntry[list[JsonProvider]]:
     if not isinstance(store, StackStorage):
-        single, date = read_json(store, entry)
-        return (single['providers'], date)
+        data: ReadEntry[JsonRootProvider] = read_json(store, entry)
+        return ReadEntry(data.data['providers'], data.modified_date)
     result: list[JsonProvider] = []
-    members = [read_json(x, entry) for x in store.stack if x.exists(entry)]
-    date = max(x[1] for x in members)
+    members: list[ReadEntry[JsonRootProvider]] = [read_json(x, entry) for x in store.stack if x.exists(entry)]
+    date = date_max([x.modified_date for x in members])
     for member in members:
-        result.extend(member[0]['providers'])
-    return result, date
+        result.extend(member.data['providers'])
+    return ReadEntry(result, date)
 
-def read_font_txt(store: Storage, entry: pathlib.PurePath) -> tuple[list[str], datetime.datetime]:
+def read_font_txt(store: Storage, entry: pathlib.PurePath) -> ReadEntry[list[str]]:
     text = store.read(entry).decode('utf-8')
     lines: list[str] = [x for x in text.split('\n') if not x.startswith('#')]
-    return (lines, store.modified_time(entry))
+    return ReadEntry(lines, store.modified_time(entry))
 
 def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> pathlib.PurePath:
     if ':' not in identifier:
@@ -120,19 +126,30 @@ def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> pathl
         path += f'.{suffix}'
     return pathlib.PurePath(path)
 
-def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime) -> list[Provider]:
+def date_max(dates: list[datetime.datetime | None]) -> datetime.datetime | None:
+    result: datetime.datetime | None = None
+    for entry in dates:
+        if entry is not None:
+            if result is None:
+                result = entry
+            else:
+                result = max(result, entry)
+    return result
+
+def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime | None) -> list[Provider]:
    result: list[Provider] = []
    for provider in providers:
        match provider['type']:
            case 'bitmap':
                img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
-               img, img_date = read_image(store, img_entry)
+               img_data = read_image(store, img_entry)
                full = BitmapProvider(
                    height=provider.get('height', 8),
                    ascent=provider['ascent'],
-                   image=img,
+                   image=img_data.data,
                    chars=provider['chars'],
                    modified_date=max(modified_date, img_date)
+                   modified_date=date_max([modified_date, img_data.modified_date])
                )
                result.append(full)
            case 'space':
@@ -143,11 +160,11 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                result.append(full)
            case 'reference':
                entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
-               entries, date = read_font_definition(store, entry)
-               converted = convert_providers(store, entries, max(modified_date, date))
+               font_data = read_font_definition(store, entry)
+               converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]))
                result.extend(converted)
    return result
 
 def load_providers(store: Storage, entry: pathlib.PurePath) -> list[Provider]:
-    entries, date = read_font_definition(store, entry)
-    return convert_providers(store, entries, date)
+    font_data = read_font_definition(store, entry)
+    return convert_providers(store, font_data.data, font_data.modified_date)

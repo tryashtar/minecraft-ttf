@@ -4,6 +4,8 @@ import pathlib
 import typing
 import zipfile
 
+import requests
+
 
 class Storage(abc.ABC):
     @abc.abstractmethod
@@ -13,7 +15,7 @@ class Storage(abc.ABC):
     @abc.abstractmethod
     def exists(self, entry: pathlib.PurePath) -> bool: pass
     @abc.abstractmethod
-    def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime: pass
+    def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime | None: pass
 
 class FilesystemStorage(Storage):
     def __init__(self, root: pathlib.Path):
@@ -99,7 +101,7 @@ class StackStorage(Storage):
         return any(x.exists(entry) for x in self.stack)
 
     @typing.override
-    def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime:
+    def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime | None:
         for member in self.stack:
             if member.exists(entry):
                 return member.modified_time(entry)
@@ -112,3 +114,40 @@ def get_storage(location: pathlib.Path) -> Storage | None:
         zip = zipfile.ZipFile(location, 'r')
         return ZipStorage(zip)
     return None
+
+AssetEntry = typing.TypedDict('AssetEntry', {
+    'hash': str
+})
+
+AssetSource = typing.TypedDict('AssetSource', {
+    'objects': dict[str, AssetEntry],
+})
+
+class AssetStorage(Storage):
+    def __init__(self, server: str, prefix: pathlib.PurePath, source: AssetSource):
+        self.server = server
+        self.prefix = prefix
+        self.source = source
+
+    @typing.override
+    def get_entries(self, prefix: pathlib.PurePath) -> list[pathlib.PurePath]:
+        modified = prefix.relative_to(self.prefix).as_posix()
+        return [pathlib.PurePath(x) for x in self.source['objects'] if x.startswith(modified)]
+          
+    @typing.override
+    def read(self, entry: pathlib.PurePath) -> bytes:
+        modified = entry.relative_to(self.prefix).as_posix()
+        hash = self.source['objects'][modified]['hash']
+        url = f'{self.server}/{hash[:2]}/{hash}'
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.content
+
+    @typing.override
+    def exists(self, entry: pathlib.PurePath) -> bool:
+        modified = entry.relative_to(self.prefix).as_posix()
+        return modified in self.source['objects']
+       
+    @typing.override
+    def modified_time(self, entry: pathlib.PurePath) -> None:
+        return None
