@@ -61,6 +61,7 @@ def get_providers(jar: zipfile.ZipFile, version: versions.MinecraftVersion, iden
         providers.append(bitmap)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
+    return providers
 
 JsonBitmapProvider = typing.TypedDict('JsonBitmapProvider', {
     'type': typing.Literal['bitmap'],

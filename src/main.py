@@ -1,9 +1,10 @@
+import argparse
 import datetime
 import json
 import pathlib
-import sys
 import zipfile
 
+import fontTools.fontBuilder
 import requests
 
 import providers
@@ -13,41 +14,67 @@ from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vec
 
 
 def main():
-    manifest = get_manifest()
-    if sys.argv[1] == 'latest':
-        version = get_version(manifest, manifest['latest']['snapshot'])
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest='command', required=True)
+    vanilla = commands.add_parser('vanilla')
+    vanilla.add_argument('version', type=str)
+    vanilla.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'))
+    vanilla.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'))
+    args = parser.parse_args()
+    match args.command:
+        case 'vanilla':
+            main_vanilla(args.version, args.output, args.cache)
+
+def main_vanilla(version_id: str, output: pathlib.Path, cache: pathlib.Path):
+    manifest = get_manifest(cache)
+    if version_id == 'latest':
+        version_data = get_version(manifest, manifest['latest']['snapshot'])
     else:
-        version = get_version(manifest, sys.argv[1])
-    if version is None:
-        print(f'Version {sys.argv[1]} not found in manifest')
+        version_data = get_version(manifest, version_id)
+    if version_data is None:
+        print(f'Version {version_id} not found in manifest')
         return
-    jar_path = get_jar(version['id'], version['url'])
-    aglfn = get_aglfn()
-    print('Converting fonts...')
+    jar_path = get_jar(version_data['id'], version_data['url'], cache)
+    aglfn = get_aglfn(cache)
+    print(f'Converting fonts from Minecraft {version_data['id']}')
     with zipfile.ZipFile(jar_path, 'r') as jar:
         version = versions.detect_version(jar)
         if version is None:
             print('Unable to determine capabilities of jar!')
             return
-        print(f'Detected font capabilities: {version}')
+        print(f'Detected font capabilities: {version.name}')
         # TTF metadata includes a creation date
         # this information isn't in the jar, so we have to provide it ourselves
-        try_font('Default', 'minecraft:default', version, jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
-        try_font('Enchanting', 'minecraft:alt', version, jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn)
-        try_font('Illager Runes', 'minecraft:illageralt', version, jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
+        vanilla_try_font('Default', 'minecraft:default', version, jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn, output)
+        vanilla_try_font('Enchanting', 'minecraft:alt', version, jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn, output)
+        vanilla_try_font('Illager Runes', 'minecraft:illageralt', version, jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn, output)
     print('Done!')
 
-def try_font(name: str, identifier: str, version: versions.MinecraftVersion, jar: zipfile.ZipFile, created_date: datetime.datetime, aglfn: dict[str, str]):
+def vanilla_try_font(
+   name: str,
+   identifier: str,
+   version: versions.MinecraftVersion,
+   jar: zipfile.ZipFile,
+   created_date: datetime.datetime,
+   aglfn: dict[str, str],
+   out: pathlib.Path
+):
     provider_list = providers.get_providers(jar, version, identifier)
     if provider_list is None:
         return
-    print(f'{name}...')
-    convert_font(name, provider_list, version.supports_providers, created_date, aglfn)
+    print(f'Converting {name}')
+    fonts = convert_font(name, provider_list, version.supports_providers, created_date, aglfn)
+    for style, font in fonts.items():
+        full_name = 'Minecraft ' + name
+        ttf_name = full_name.replace(' ', '') + '-' + style.replace(' ', '')
+        dest = out / f'{ttf_name}.ttf'
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        font.save(dest)
 
-def get_jar(version_id: str, meta_url: str) -> pathlib.Path:
-    cached_path = pathlib.Path('cache') / f'minecraft-{version_id}.jar'
+def get_jar(version_id: str, meta_url: str, cache: pathlib.Path) -> pathlib.Path:
+    cached_path = cache / f'minecraft-{version_id}.jar'
     if not cached_path.exists():
-        print(f'Downloading minecraft jar {version_id}...')
+        print(f'Downloading Minecraft jar {version_id}')
         response = requests.get(meta_url)
         data = response.json()
         client_jar = data['downloads']['client']['url']
@@ -63,13 +90,13 @@ def get_version(manifest: dict, version_id: str) -> dict | None:
             return version
     return None
 
-def get_manifest() -> dict:
-    cached_path = pathlib.Path('cache') / 'manifest.json'
+def get_manifest(cache: pathlib.Path) -> dict:
+    cached_path = cache / 'manifest.json'
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except FileNotFoundError:
-        print('Downloading version manifest...')
+        print('Downloading version manifest')
         manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
         response = requests.get(manifest_url)
         data = response.json()
@@ -79,10 +106,10 @@ def get_manifest() -> dict:
     return data
 
 # The Adobe Glyph List For New Fonts tells us what names to use for the glyphs that characters are mapped to
-def get_aglfn() -> dict[str, str]:
-    cached_path = pathlib.Path('cache') / 'aglfn.txt'
+def get_aglfn(cache: pathlib.Path) -> dict[str, str]:
+    cached_path = cache / 'aglfn.txt'
     if not cached_path.exists():
-        print('Downloading Adobe AGLFN...')
+        print('Downloading Adobe AGLFN')
         response = requests.get('https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/refs/heads/master/aglfn.txt')
         cached_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cached_path, 'wb') as f:
@@ -98,7 +125,13 @@ def get_aglfn() -> dict[str, str]:
             aglfn_map[codepoint] = name
     return aglfn_map
 
-def convert_font(name: str, provider_list: list[providers.Provider], has_missing_glyph: bool, created_date: datetime.datetime, aglfn: dict[str, str]):
+def convert_font(
+    name: str,
+    provider_list: list[providers.Provider],
+    has_missing_glyph: bool,
+    created_date: datetime.datetime,
+    aglfn: dict[str, str]
+) -> dict[str, fontTools.fontBuilder.FontBuilder]:
     modified_date = created_date
     seen_chars: set[str] = set()
     fonts: dict[str, dict[str, CharInfo]] = {'Regular': {}, 'Bold': {}, 'Italic': {}, 'Bold Italic': {}}
@@ -158,9 +191,9 @@ def convert_font(name: str, provider_list: list[providers.Provider], has_missing
                     glyph = provider.image.crop((x * glyph_width, y * glyph_height, (x + 1) * glyph_width, (y + 1) * glyph_height)).convert('RGBA')
                     mask = bitmap_from_image(glyph)
                     add_bitmap_glyph(char, mask, provider.height, provider.ascent)
+    final_fonts: dict[str, fontTools.fontBuilder.FontBuilder] = {}
     for style, data in fonts.items():
         full_name = 'Minecraft ' + name
-        ttf_name = full_name.replace(' ', '') + '-' + style.replace(' ', '')
         info = FontInfo(
             name = full_name,
             style = style,
@@ -172,20 +205,19 @@ def convert_font(name: str, provider_list: list[providers.Provider], has_missing
             version = 'Version 1.000'
         )
         positions = FontPositions(
-           ascent = 9 / 12,
-           descent = 2 / 12,
-           sCapHeight = 7 / 12,
-           sxHeight = 5 / 12,
-           yStrikeoutPosition = 4 / 12,
-           yStrikeoutSize = 1 / 12,
-           underlinePosition = -1 / 12,
-           underlineThickness = 1 / 12,
-           italicAngle = -14.05598
+            ascent = 9 / 12,
+            descent = 2 / 12,
+            sCapHeight = 7 / 12,
+            sxHeight = 5 / 12,
+            yStrikeoutPosition = 4 / 12,
+            yStrikeoutSize = 1 / 12,
+            underlinePosition = -1 / 12,
+            underlineThickness = 1 / 12,
+            italicAngle = -14.05598
         )
         font = make_font(info, positions, data, aglfn)
-        dest = pathlib.Path('out') / f'{ttf_name}.ttf'
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        font.save(dest)
+        final_fonts[style] = font
+    return final_fonts
 
 if __name__ == '__main__':
     main()

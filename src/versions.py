@@ -159,7 +159,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_spaces=simple_spaces,
             entry_map={'minecraft:default': 'font/default.png'}
         )
-    if 'jar/mob/cow.png' in names:
+    if 'mob/cow.png' in names:
         # this wrongly includes a1.0.8 (which added cow.png)
         # but no easy way to distinguish the two versions
         return MinecraftVersion(
