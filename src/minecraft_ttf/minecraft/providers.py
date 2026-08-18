@@ -65,7 +65,19 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
         providers.append(bitmap)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
+    if version.hardcoded_unifont is not None:
+        sheet_template, size_entry = version.hardcoded_unifont
+        size_date = store.modified_time(size_entry)
+        size_bytes = store.read(size_entry)
+        sheet_entries = [pathlib.PurePath(sheet_template.replace('%s', f'{sheet_id:02x}')) for sheet_id in range(0xff + 1)]
+        converted = legacy_unicode(store, sheet_entries, size_bytes, size_date)
+        providers.extend(converted)
     return providers
+
+FontFilter = typing.TypedDict('FontFilter', {
+    'uniform': typing.NotRequired[bool],
+    'jp': typing.NotRequired[bool],
+})
 
 JsonBitmapProvider = typing.TypedDict('JsonBitmapProvider', {
     'type': typing.Literal['bitmap'],
@@ -73,22 +85,26 @@ JsonBitmapProvider = typing.TypedDict('JsonBitmapProvider', {
     'height': typing.NotRequired[int],
     'ascent': int,
     'chars': list[str],
+    'filter': typing.NotRequired[FontFilter],
 })
 
 JsonSpaceProvider = typing.TypedDict('JsonSpaceProvider', {
     'type': typing.Literal['space'],
     'advances': dict[str, int],
+    'filter': typing.NotRequired[FontFilter],
 })
 
 JsonReferenceProvider = typing.TypedDict('JsonReferenceProvider', {
     'type': typing.Literal['reference'],
     'id': str,
+    'filter': typing.NotRequired[FontFilter],
 })
 
 JsonLegacyUnicodeProvider = typing.TypedDict('JsonLegacyUnicodeProvider', {
     'type': typing.Literal['legacy_unicode'],
     'sizes': str,
     'template': str,
+    'filter': typing.NotRequired[FontFilter],
 })
 
 UnihexSizeOverride = typing.TypedDict('UnihexSizeOverride', {
@@ -102,6 +118,7 @@ JsonUnihexProvider = typing.TypedDict('JsonUnihexProvider', {
     'type': typing.Literal['unihex'],
     'hex_file': str,
     'size_overrides': typing.NotRequired[list[UnihexSizeOverride]],
+    'filter': typing.NotRequired[FontFilter],
 })
 
 JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider | JsonLegacyUnicodeProvider | JsonUnihexProvider
@@ -166,57 +183,62 @@ def date_max(dates: list[datetime.datetime | None]) -> datetime.datetime | None:
     return result
 
 def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime | None) -> list[Provider]:
-   result: list[Provider] = []
-   for provider in providers:
-       match provider['type']:
-           case 'bitmap':
-               img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
-               img_data = read_image(store, img_entry)
-               full = BitmapProvider(
-                   height=provider.get('height', 8),
-                   ascent=provider['ascent'],
-                   image=img_data.data,
-                   chars=filter_nul(provider['chars']),
-                   sizes=None,
-                   modified_date=date_max([modified_date, img_data.modified_date])
-               )
-               result.append(full)
-           case 'space':
-               full = SpaceProvider(
-                   spaces=provider['advances'],
-                   modified_date=modified_date
-               )
-               result.append(full)
-           case 'reference':
-               entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
-               font_data = read_font_definition(store, entry)
-               converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]))
-               result.extend(converted)
-           case 'legacy_unicode':
-               size_entry = identifier_to_entry(provider['sizes'], kind=None, suffix=None)
-               size_date = store.modified_time(size_entry)
-               size_bytes = store.read(size_entry)
-               for sheet_id in range(0xff + 1):
-                   sheet_entry = identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None)
-                   if store.exists(sheet_entry):
-                       char_offset = sheet_id * 256
-                       chars = [[chr(x) if size_bytes[x] > 0 and x < 0xffff else None for x in range(char_offset + y * 16, char_offset + y * 16 + 16)] for y in range(16)]
-                       size_range = size_bytes[char_offset:char_offset + 256]
-                       sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf) for i, x in enumerate(size_range) if x > 0}
-                       img_data = read_image(store, sheet_entry)
-                       full = BitmapProvider(
-                           height=8,
-                           ascent=7,
-                           image=img_data.data,
-                           chars=chars,
-                           sizes=sizes,
-                           modified_date=date_max([modified_date, size_date, img_data.modified_date])
-                       )
-                       result.append(full)
-               provider['template']
-           case 'unihex':
-               pass
-   return result
+    result: list[Provider] = []
+    for provider in providers:
+        match provider['type']:
+            case 'bitmap':
+                img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
+                img_data = read_image(store, img_entry)
+                full = BitmapProvider(
+                    height=provider.get('height', 8),
+                    ascent=provider['ascent'],
+                    image=img_data.data,
+                    chars=filter_nul(provider['chars']),
+                    sizes=None,
+                    modified_date=date_max([modified_date, img_data.modified_date])
+                )
+                result.append(full)
+            case 'space':
+                full = SpaceProvider(
+                    spaces=provider['advances'],
+                    modified_date=modified_date
+                )
+                result.append(full)
+            case 'reference':
+                entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
+                font_data = read_font_definition(store, entry)
+                converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]))
+                result.extend(converted)
+            case 'legacy_unicode':
+                size_entry = identifier_to_entry(provider['sizes'], kind=None, suffix=None)
+                size_date = store.modified_time(size_entry)
+                size_bytes = store.read(size_entry)
+                sheet_entries = [identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None) for sheet_id in range(0xff + 1)]
+                converted = legacy_unicode(store, sheet_entries, size_bytes, date_max([modified_date, size_date]))
+                result.extend(converted)
+            case 'unihex':
+                pass
+    return result
+
+def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, modified_date: datetime.datetime | None) -> list[BitmapProvider]:
+    result: list[BitmapProvider] = []
+    for sheet_id, sheet_entry in enumerate(sheets):
+        if store.exists(sheet_entry):
+            char_offset = sheet_id * 256
+            chars = [[chr(x) if size_bytes[x] > 0 and x < 0xffff else None for x in range(char_offset + y * 16, char_offset + y * 16 + 16)] for y in range(16)]
+            size_range = size_bytes[char_offset:char_offset + 256]
+            sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf) for i, x in enumerate(size_range) if x > 0}
+            img_data = read_image(store, sheet_entry)
+            full = BitmapProvider(
+                height=8,
+                ascent=7,
+                image=img_data.data,
+                chars=chars,
+                sizes=sizes,
+                modified_date=date_max([modified_date, img_data.modified_date])
+            )
+            result.append(full)
+    return result
 
 def load_providers(store: Storage, entry: pathlib.PurePath) -> list[Provider]:
     font_data = read_font_definition(store, entry)
