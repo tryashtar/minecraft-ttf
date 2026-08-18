@@ -7,7 +7,7 @@ import typing
 
 import PIL.Image
 
-from minecraft_ttf.minecraft.storage import Storage
+from minecraft_ttf.minecraft.storage import StackStorage, Storage
 from minecraft_ttf.minecraft.versions import MinecraftVersion
 
 
@@ -93,6 +93,17 @@ def read_json(store: Storage, entry: pathlib.PurePath) -> tuple[dict[str, typing
     data = json.loads(text)
     return (data, store.modified_time(entry))
 
+def read_font_definition(store: Storage, entry: pathlib.PurePath) -> tuple[list[JsonProvider], datetime.datetime]:
+    if not isinstance(store, StackStorage):
+        single, date = read_json(store, entry)
+        return (single['providers'], date)
+    result: list[JsonProvider] = []
+    members = [read_json(x, entry) for x in store.stack if x.exists(entry)]
+    date = max(x[1] for x in members)
+    for member in members:
+        result.extend(member[0]['providers'])
+    return result, date
+
 def read_font_txt(store: Storage, entry: pathlib.PurePath) -> tuple[list[str], datetime.datetime]:
     text = store.read(entry).decode('utf-8')
     lines: list[str] = [x for x in text.split('\n') if not x.startswith('#')]
@@ -132,13 +143,11 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                result.append(full)
            case 'reference':
                entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
-               data, date = read_json(store, entry)
-               entries: list[JsonProvider] = data['providers']
+               entries, date = read_font_definition(store, entry)
                converted = convert_providers(store, entries, max(modified_date, date))
                result.extend(converted)
    return result
 
 def load_providers(store: Storage, entry: pathlib.PurePath) -> list[Provider]:
-    data, date = read_json(store, entry)
-    entries: list[JsonProvider] = data['providers']
+    entries, date = read_font_definition(store, entry)
     return convert_providers(store, entries, date)
