@@ -7,6 +7,7 @@ import zipfile
 import requests
 
 import providers
+import versions
 from minecraft_ttf.bitmap import Bitmap, bitmap_from_image
 from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vectorize
 
@@ -24,17 +25,24 @@ def main():
     aglfn = get_aglfn()
     print('Converting fonts...')
     with zipfile.ZipFile(jar_path, 'r') as jar:
-        version = providers.detect_version(jar)
+        version = versions.detect_version(jar)
         if version is None:
             print('Unable to determine capabilities of jar!')
             return
         print(f'Detected font capabilities: {version}')
         # TTF metadata includes a creation date
         # this information isn't in the jar, so we have to provide it ourselves
-        convert_font('Default', 'minecraft:default', version, jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
-        convert_font('Enchanting', 'minecraft:alt', version, jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn)
-        convert_font('Illager Runes', 'minecraft:illageralt', version, jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
+        try_font('Default', 'minecraft:default', version, jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
+        try_font('Enchanting', 'minecraft:alt', version, jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn)
+        try_font('Illager Runes', 'minecraft:illageralt', version, jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
     print('Done!')
+
+def try_font(name: str, identifier: str, version: versions.MinecraftVersion, jar: zipfile.ZipFile, created_date: datetime.datetime, aglfn: dict[str, str]):
+    provider_list = providers.get_providers(jar, version, identifier)
+    if provider_list is None:
+        return
+    print(f'{name}...')
+    convert_font(name, provider_list, version.supports_providers, created_date, aglfn)
 
 def get_jar(version_id: str, meta_url: str) -> pathlib.Path:
     cached_path = pathlib.Path('cache') / f'minecraft-{version_id}.jar'
@@ -90,11 +98,7 @@ def get_aglfn() -> dict[str, str]:
             aglfn_map[codepoint] = name
     return aglfn_map
 
-def convert_font(name: str, identifier: str, version: providers.MinecraftVersion, jar: zipfile.ZipFile, created_date: datetime.datetime, aglfn: dict[str, str]):
-    provider_list = providers.get_providers(jar, version, identifier)
-    if provider_list is None:
-       return
-    print(f'{name}...')
+def convert_font(name: str, provider_list: list[providers.Provider], has_missing_glyph: bool, created_date: datetime.datetime, aglfn: dict[str, str]):
     modified_date = created_date
     seen_chars: set[str] = set()
     fonts: dict[str, dict[str, CharInfo]] = {'Regular': {}, 'Bold': {}, 'Italic': {}, 'Bold Italic': {}}
@@ -124,10 +128,11 @@ def convert_font(name: str, identifier: str, version: providers.MinecraftVersion
         fonts['Bold Italic'][char] = CharInfo(width = (biw + add_width) * scale, height = bih * scale, path = bold_italic_path)
     mw, mh = (5, 8)
     missing = Bitmap((mw, mh))
-    for y in range(mh):
-        for x in range(mw):
-            if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
-                missing.set_at((x, y), True)
+    if has_missing_glyph:
+        for y in range(mh):
+            for x in range(mw):
+                if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
+                    missing.set_at((x, y), True)
     add_bitmap_glyph('.notdef', missing, 8, 8)
     for provider in provider_list:
         if provider.modified_date is not None:
