@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import pathlib
 import zipfile
 
 
@@ -10,7 +11,7 @@ class MinecraftVersion:
     hardcoded_chars: list[str] | None
     lookup_chars: bool
     hardcoded_spaces: dict[str, int] | None
-    entry_map: dict[str, str] | None
+    entry_map: dict[str, pathlib.PurePath] | None
 
 def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
     names = jar.namelist()
@@ -52,9 +53,9 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_spaces=simple_spaces,
             entry_map=None,
         )
-    asset_map = {
-       'minecraft:default': 'assets/minecraft/textures/font/ascii.png',
-       'minecraft:alt': 'assets/minecraft/textures/font/ascii_sga.png'
+    asset_map: dict[str, pathlib.PurePath] = {
+       'minecraft:default': pathlib.PurePath('assets/minecraft/textures/font/ascii.png'),
+       'minecraft:alt': pathlib.PurePath('assets/minecraft/textures/font/ascii_sga.png'),
     }
     if 'font.txt' not in names and 'assets/minecraft/textures/font/ascii.png' in names:
         # this wrongly includes 13w42a (which removed font.txt)
@@ -100,7 +101,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars=None,
             lookup_chars=True,
             hardcoded_spaces=simple_spaces,
-            entry_map={'minecraft:default': 'font/default.png', 'minecraft:alt': 'font/alternate.png'}
+            entry_map={'minecraft:default': pathlib.PurePath('font/default.png'), 'minecraft:alt': pathlib.PurePath('font/alternate.png')}
         )
     empty = '\u0000' * 16
     if 'lang/en_US.lang' in names:
@@ -130,7 +131,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             ],
             lookup_chars=False,
             hardcoded_spaces=simple_spaces,
-            entry_map={'minecraft:default': 'font/default.png'}
+            entry_map={'minecraft:default': pathlib.PurePath('font/default.png')}
         )
     alpha_chars = [
         empty,
@@ -157,7 +158,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars=alpha_chars,
             lookup_chars=False,
             hardcoded_spaces=simple_spaces,
-            entry_map={'minecraft:default': 'font/default.png'}
+            entry_map={'minecraft:default': pathlib.PurePath('font/default.png')}
         )
     if 'mob/cow.png' in names:
         # this wrongly includes a1.0.8 (which added cow.png)
@@ -168,7 +169,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars=alpha_chars,
             lookup_chars=False,
             hardcoded_spaces=simple_spaces,
-            entry_map={'minecraft:default': 'default.png'}
+            entry_map={'minecraft:default': pathlib.PurePath('default.png')}
         )
     full_chars = [''.join(chr(x) for x in range(y * 16, (y + 1) * 16)) for y in range(16)]
     if 'default.png' in names:
@@ -178,7 +179,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars=full_chars,
             lookup_chars=False,
             hardcoded_spaces=simple_spaces,
-            entry_map={'minecraft:default': 'default.png'}
+            entry_map={'minecraft:default': pathlib.PurePath('default.png')}
         )
     if 'default.gif' in names:
         return MinecraftVersion(
@@ -187,6 +188,6 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars=full_chars,
             lookup_chars=False,
             hardcoded_spaces=simple_spaces,
-            entry_map={'minecraft:default': 'default.gif'}
+            entry_map={'minecraft:default': pathlib.PurePath('default.gif')}
         )
     return None

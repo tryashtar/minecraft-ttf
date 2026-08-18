@@ -8,6 +8,7 @@ import fontTools.fontBuilder
 import requests
 
 import providers
+import storage
 import versions
 from minecraft_ttf.bitmap import Bitmap, bitmap_from_image
 from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vectorize
@@ -16,50 +17,49 @@ from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vec
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest='command', required=True)
+    parser.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'))
+    parser.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'))
     vanilla = commands.add_parser('vanilla')
     vanilla.add_argument('version', type=str)
-    vanilla.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'))
-    vanilla.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'))
+    pack = commands.add_parser('pack')
+    pack.add_argument('version', type=str)
+    pack.add_argument('location', type=pathlib.Path)
+    pack.add_argument('identifier', type=str)
+    pack.add_argument('name', type=str)
     args = parser.parse_args()
     match args.command:
         case 'vanilla':
             main_vanilla(args.version, args.output, args.cache)
+        case 'pack':
+            main_pack(args.version, args.location, args.identifier, args.name, args.output, args.cache)
 
 def main_vanilla(version_id: str, output: pathlib.Path, cache: pathlib.Path):
-    manifest = get_manifest(cache)
-    if version_id == 'latest':
-        version_data = get_version(manifest, manifest['latest']['snapshot'])
-    else:
-        version_data = get_version(manifest, version_id)
-    if version_data is None:
-        print(f'Version {version_id} not found in manifest')
+    result = jar_and_version(version_id, cache)
+    if result is None:
         return
-    jar_path = get_jar(version_data['id'], version_data['url'], cache)
+    jar, version_data, version = result
+    print(f'Detected font capabilities: {version.name}')
     aglfn = get_aglfn(cache)
     print(f'Converting fonts from Minecraft {version_data['id']}')
-    with zipfile.ZipFile(jar_path, 'r') as jar:
-        version = versions.detect_version(jar)
-        if version is None:
-            print('Unable to determine capabilities of jar!')
-            return
-        print(f'Detected font capabilities: {version.name}')
+    with jar:
+        store = storage.ZipStorage(jar)
         # TTF metadata includes a creation date
         # this information isn't in the jar, so we have to provide it ourselves
-        vanilla_try_font('Default', 'minecraft:default', version, jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn, output)
-        vanilla_try_font('Enchanting', 'minecraft:alt', version, jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn, output)
-        vanilla_try_font('Illager Runes', 'minecraft:illageralt', version, jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn, output)
+        vanilla_try_font('Default', 'minecraft:default', version, store, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn, output)
+        vanilla_try_font('Enchanting', 'minecraft:alt', version, store, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn, output)
+        vanilla_try_font('Illager Runes', 'minecraft:illageralt', version, store, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn, output)
     print('Done!')
 
 def vanilla_try_font(
    name: str,
    identifier: str,
    version: versions.MinecraftVersion,
-   jar: zipfile.ZipFile,
+   store: storage.Storage,
    created_date: datetime.datetime,
    aglfn: dict[str, str],
    out: pathlib.Path
 ):
-    provider_list = providers.get_providers(jar, version, identifier)
+    provider_list = providers.get_providers(store, version, identifier)
     if provider_list is None:
         return
     print(f'Converting {name}')
@@ -70,6 +70,49 @@ def vanilla_try_font(
         dest = out / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
         font.save(dest)
+
+def jar_and_version(version_id: str, cache: pathlib.Path) -> tuple[zipfile.ZipFile, dict, versions.MinecraftVersion] | None:
+    manifest = get_manifest(cache)
+    if version_id == 'latest':
+        version_data = get_version(manifest, manifest['latest']['snapshot'])
+    else:
+        version_data = get_version(manifest, version_id)
+    if version_data is None:
+        print(f'Version {version_id} not found in manifest')
+        return None
+    jar_path = get_jar(version_data['id'], version_data['url'], cache)
+    zip = zipfile.ZipFile(jar_path, 'r')
+    version = versions.detect_version(zip)
+    if version is None:
+        print('Unable to determine capabilities of jar!')
+        return None
+    return (zip, version_data, version)
+
+def main_pack(version_id: str, location: pathlib.Path, identifier: str, name: str, out: pathlib.Path, cache: pathlib.Path):
+    pack_storage = storage.get_storage(location)
+    if pack_storage is None:
+        print(f'No resource pack at {location}')
+        return
+    result = jar_and_version(version_id, cache)
+    if result is None:
+        return
+    jar, version_data, version = result
+    aglfn = get_aglfn(cache)
+    print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {version_data['id']}')
+    with jar:
+        jar_storage = storage.ZipStorage(jar)
+        store = storage.StackStorage([jar_storage, pack_storage])
+        provider_list = providers.get_providers(store, version, identifier)
+        if provider_list is None:
+            print(f'No font with ID {identifier} in jar or resource pack')
+            return
+        created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
+        fonts = convert_font(name, provider_list, version.supports_providers, created_date, aglfn)
+        for style, font in fonts.items():
+            ttf_name = name.replace(' ', '') + '-' + style.replace(' ', '')
+            dest = out / f'{ttf_name}.ttf'
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            font.save(dest)
 
 def get_jar(version_id: str, meta_url: str, cache: pathlib.Path) -> pathlib.Path:
     cached_path = cache / f'minecraft-{version_id}.jar'
@@ -148,13 +191,13 @@ def convert_font(
         bold_mask.draw(mask, (0, 0))
         bold_mask.draw(mask, (1, 0))
         scale = height / m_height * pixel_scale
-        offset = (0, (height - ascent) / height * m_height)
-        italic_offset = (-6 / height, (height - ascent) / height * m_height)
+        offset = (0, 0) if height == 0 else (0, (height - ascent) / height * m_height)
+        italic_offset = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
         (path, (w, h)) = vectorize(mask, scale, offset)
         (italic_path, (iw, ih)) = vectorize(mask, scale, italic_offset, italic=True)
         (bold_path, (bw, bh)) = vectorize(bold_mask, scale, offset)
         (bold_italic_path, (biw, bih)) = vectorize(bold_mask, scale, italic_offset, italic=True)
-        add_width = m_height / height
+        add_width = 0 if height == 0 else m_height / height
         fonts['Regular'][char] = CharInfo(width = (w + add_width) * scale, height = h * scale, path = path)
         fonts['Italic'][char] = CharInfo(width = (iw + add_width) * scale, height = ih * scale, path = italic_path)
         fonts['Bold'][char] = CharInfo(width = (bw + add_width) * scale, height = bh * scale, path = bold_path)
@@ -174,6 +217,7 @@ def convert_font(
             for char, width in provider.spaces.items():
                 if char in seen_chars:
                     continue
+                width = max(0, width)
                 seen_chars.add(char)
                 fonts['Regular'][char] = CharInfo(width = width * pixel_scale, height = 0, path = None)
                 fonts['Italic'][char] = CharInfo(width = width * pixel_scale, height = 0, path = None)
@@ -188,9 +232,17 @@ def convert_font(
                         continue
                     if char in seen_chars:
                         continue
-                    glyph = provider.image.crop((x * glyph_width, y * glyph_height, (x + 1) * glyph_width, (y + 1) * glyph_height)).convert('RGBA')
-                    mask = bitmap_from_image(glyph)
-                    add_bitmap_glyph(char, mask, provider.height, provider.ascent)
+                    dimensions = (x * glyph_width, y * glyph_height, (x + 1) * glyph_width, (y + 1) * glyph_height)
+                    if provider.ascent > -16384 and provider.height > 0:
+                        glyph = provider.image.crop(dimensions).convert('RGBA')
+                        mask = bitmap_from_image(glyph)
+                        p_height = provider.height
+                        p_ascent = provider.ascent
+                    else:
+                        mask = Bitmap((dimensions[2], dimensions[3]))
+                        p_height = 0
+                        p_ascent = 0
+                    add_bitmap_glyph(char, mask, p_height, p_ascent)
     final_fonts: dict[str, fontTools.fontBuilder.FontBuilder] = {}
     for style, data in fonts.items():
         full_name = 'Minecraft ' + name

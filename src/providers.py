@@ -2,11 +2,12 @@ import dataclasses
 import datetime
 import io
 import json
+import pathlib
 import typing
-import zipfile
 
 import PIL.Image
 
+import storage
 import versions
 
 
@@ -25,26 +26,25 @@ class SpaceProvider:
 
 Provider = BitmapProvider | SpaceProvider
 
-def get_providers(jar: zipfile.ZipFile, version: versions.MinecraftVersion, identifier: str) -> list[Provider] | None:
-    names = jar.namelist()
+def get_providers(store: storage.Storage, version: versions.MinecraftVersion, identifier: str) -> list[Provider] | None:
     if version.supports_providers:
         entry = identifier_to_entry(identifier, 'font', 'json')
-        if entry not in names:
+        if not store.exists(entry):
             return None
-        providers = load_providers(jar, entry)
+        providers = load_providers(store, entry)
     else:
         providers = []
         assert version.entry_map is not None
         if identifier not in version.entry_map:
             return None
         img_entry = version.entry_map[identifier]
-        img, img_date = read_image(jar, img_entry)
+        img, img_date = read_image(store, img_entry)
         if version.hardcoded_chars is not None:
             chars = version.hardcoded_chars
             date = img_date
         else:
             assert version.lookup_chars
-            font, font_date = read_font_txt(jar, 'font.txt')
+            font, font_date = read_font_txt(store, pathlib.PurePath('font.txt'))
             empty = '\u0000' * 16
             chars: list[str] = [
                 empty,
@@ -83,29 +83,22 @@ JsonReferenceProvider = typing.TypedDict('JsonReferenceProvider', {
 
 JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider
 
-def date_time(jartime: tuple) -> datetime.datetime:
-    y, m, d, h, mm, s = jartime
-    return datetime.datetime(y, m, d, h, mm, s, 0, tzinfo=datetime.UTC)
-
-def read_image(jar: zipfile.ZipFile, entry: str) -> tuple[PIL.Image.Image, datetime.datetime]:
-    data = jar.read(entry)
+def read_image(store: storage.Storage, entry: pathlib.PurePath) -> tuple[PIL.Image.Image, datetime.datetime]:
+    data = store.read(entry)
     img = PIL.Image.open(io.BytesIO(data))
-    date = jar.getinfo(entry).date_time
-    return (img, date_time(date))
+    return (img, store.modified_time(entry))
 
-def read_json(jar: zipfile.ZipFile, entry: str) -> tuple[dict[str, typing.Any], datetime.datetime]:
-    text = jar.read(entry)
+def read_json(store: storage.Storage, entry: pathlib.PurePath) -> tuple[dict[str, typing.Any], datetime.datetime]:
+    text = store.read(entry)
     data = json.loads(text)
-    date = jar.getinfo(entry).date_time
-    return (data, date_time(date))
+    return (data, store.modified_time(entry))
 
-def read_font_txt(jar: zipfile.ZipFile, entry: str) -> tuple[list[str], datetime.datetime]:
-    text = jar.read(entry).decode('utf-8')
+def read_font_txt(store: storage.Storage, entry: pathlib.PurePath) -> tuple[list[str], datetime.datetime]:
+    text = store.read(entry).decode('utf-8')
     lines: list[str] = [x for x in text.split('\n') if not x.startswith('#')]
-    date = jar.getinfo(entry).date_time
-    return (lines, date_time(date))
+    return (lines, store.modified_time(entry))
 
-def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> str:
+def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> pathlib.PurePath:
     if ':' not in identifier:
         namespace = 'minecraft'
         rest = identifier
@@ -114,15 +107,15 @@ def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> str:
     path = f'assets/{namespace}/{kind}/{rest}'
     if suffix is not None:
         path += f'.{suffix}'
-    return path
+    return pathlib.PurePath(path)
 
-def convert_providers(jar: zipfile.ZipFile, providers: list[JsonProvider], modified_date: datetime.datetime) -> list[Provider]:
+def convert_providers(store: storage.Storage, providers: list[JsonProvider], modified_date: datetime.datetime) -> list[Provider]:
    result: list[Provider] = []
    for provider in providers:
        match provider['type']:
            case 'bitmap':
                img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
-               img, img_date = read_image(jar, img_entry)
+               img, img_date = read_image(store, img_entry)
                full = BitmapProvider(
                    height=provider.get('height', 8),
                    ascent=provider['ascent'],
@@ -139,13 +132,13 @@ def convert_providers(jar: zipfile.ZipFile, providers: list[JsonProvider], modif
                result.append(full)
            case 'reference':
                entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
-               data, date = read_json(jar, entry)
+               data, date = read_json(store, entry)
                entries: list[JsonProvider] = data['providers']
-               converted = convert_providers(jar, entries, max(modified_date, date))
+               converted = convert_providers(store, entries, max(modified_date, date))
                result.extend(converted)
    return result
 
-def load_providers(jar: zipfile.ZipFile, entry: str) -> list[Provider]:
-    data, date = read_json(jar, entry)
+def load_providers(store: storage.Storage, entry: pathlib.PurePath) -> list[Provider]:
+    data, date = read_json(store, entry)
     entries: list[JsonProvider] = data['providers']
-    return convert_providers(jar, entries, date)
+    return convert_providers(store, entries, date)
