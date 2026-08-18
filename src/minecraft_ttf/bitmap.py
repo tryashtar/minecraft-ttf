@@ -108,7 +108,9 @@ def bitmap_from_image(image: PIL.Image.Image) -> Bitmap:
     assert pixels is not None
     for y in range(image.height):
         for x in range(image.width):
-            _r, _g, _b, a = pixels[(x, y)]
+            pixel = pixels[(x, y)]
+            assert isinstance(pixel, tuple)
+            _r, _g, _b, a = pixel
             if a >= 10:
                 mask.set_at((x, y), True)
     return mask

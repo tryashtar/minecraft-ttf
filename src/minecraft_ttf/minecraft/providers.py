@@ -7,8 +7,8 @@ import typing
 
 import PIL.Image
 
-import storage
-import versions
+from minecraft_ttf.minecraft.storage import Storage
+from minecraft_ttf.minecraft.versions import MinecraftVersion
 
 
 @dataclasses.dataclass
@@ -26,7 +26,7 @@ class SpaceProvider:
 
 Provider = BitmapProvider | SpaceProvider
 
-def get_providers(store: storage.Storage, version: versions.MinecraftVersion, identifier: str) -> list[Provider] | None:
+def get_providers(store: Storage, version: MinecraftVersion, identifier: str) -> list[Provider] | None:
     if version.supports_providers:
         entry = identifier_to_entry(identifier, 'font', 'json')
         if not store.exists(entry):
@@ -83,17 +83,17 @@ JsonReferenceProvider = typing.TypedDict('JsonReferenceProvider', {
 
 JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider
 
-def read_image(store: storage.Storage, entry: pathlib.PurePath) -> tuple[PIL.Image.Image, datetime.datetime]:
+def read_image(store: Storage, entry: pathlib.PurePath) -> tuple[PIL.Image.Image, datetime.datetime]:
     data = store.read(entry)
     img = PIL.Image.open(io.BytesIO(data))
     return (img, store.modified_time(entry))
 
-def read_json(store: storage.Storage, entry: pathlib.PurePath) -> tuple[dict[str, typing.Any], datetime.datetime]:
+def read_json(store: Storage, entry: pathlib.PurePath) -> tuple[dict[str, typing.Any], datetime.datetime]:
     text = store.read(entry)
     data = json.loads(text)
     return (data, store.modified_time(entry))
 
-def read_font_txt(store: storage.Storage, entry: pathlib.PurePath) -> tuple[list[str], datetime.datetime]:
+def read_font_txt(store: Storage, entry: pathlib.PurePath) -> tuple[list[str], datetime.datetime]:
     text = store.read(entry).decode('utf-8')
     lines: list[str] = [x for x in text.split('\n') if not x.startswith('#')]
     return (lines, store.modified_time(entry))
@@ -109,7 +109,7 @@ def identifier_to_entry(identifier: str, kind: str, suffix: str | None) -> pathl
         path += f'.{suffix}'
     return pathlib.PurePath(path)
 
-def convert_providers(store: storage.Storage, providers: list[JsonProvider], modified_date: datetime.datetime) -> list[Provider]:
+def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime) -> list[Provider]:
    result: list[Provider] = []
    for provider in providers:
        match provider['type']:
@@ -138,7 +138,7 @@ def convert_providers(store: storage.Storage, providers: list[JsonProvider], mod
                result.extend(converted)
    return result
 
-def load_providers(store: storage.Storage, entry: pathlib.PurePath) -> list[Provider]:
+def load_providers(store: Storage, entry: pathlib.PurePath) -> list[Provider]:
     data, date = read_json(store, entry)
     entries: list[JsonProvider] = data['providers']
     return convert_providers(store, entries, date)
