@@ -101,10 +101,11 @@ def font_digest(font: dict[str, CharInfo]) -> str:
     for char, data in font.items():
         string = f'{char}_{data.width}_{data.height}'
         alg.update(string.encode('utf-8'))
-        for layer in data.layers:
+        if data.base_layer is not None:
+            alg.update(data.base_layer.coordinates.array.tobytes())
+        for layer in data.colored_layers:
             alg.update(layer.path.coordinates.array.tobytes())
-            if layer.color is not None:
-                alg.update(str(layer.color).encode('utf-8'))
+            alg.update(str(layer.color).encode('utf-8'))
     return alg.hexdigest()
 
 def main_vanilla_history(start: str | None, end: str | None, identifiers: set[DEFAULT_IDENTIFIERS], styles: set[STYLES], output: pathlib.Path, cache: pathlib.Path):

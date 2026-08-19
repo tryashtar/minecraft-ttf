@@ -10,15 +10,16 @@ from minecraft_ttf.bitmap import Bitmap, BitmapLabels
 
 
 @dataclasses.dataclass
-class GlyphLayer:
+class ColoredLayer:
     path: fontTools.pens.ttGlyphPen.Glyph
-    color: fontTools.ttLib.tables.C_P_A_L_.Color | None
+    color: fontTools.ttLib.tables.C_P_A_L_.Color
 
 @dataclasses.dataclass
 class CharInfo:
     width: float
     height: float
-    layers: list[GlyphLayer]
+    base_layer: fontTools.pens.ttGlyphPen.Glyph | None
+    colored_layers: list[ColoredLayer]
 
 @dataclasses.dataclass
 class FontPositions:
@@ -69,22 +70,22 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
         else:
             glyph_name = char
         glyph_widths[glyph_name] = data.width
-        if len(data.layers) == 0:
+        if data.base_layer is None:
             glyph_paths[glyph_name] = empty_glyph
         else:
-            for i, layer in enumerate(data.layers):
-                layer_name = glyph_name if i == 0 else f'{glyph_name}.layer{i}'
-                glyph_paths[layer_name] = layer.path
-                glyph_widths[layer_name] = data.width
-                if layer.color is not None:
-                    try:
-                        color_index = color_palettes.index(layer.color)
-                    except ValueError:
-                        color_index = len(color_palettes)
-                        color_palettes.append(layer.color)
-                    if glyph_name not in color_layers:
-                        color_layers[glyph_name] = []
-                    color_layers[glyph_name].append((layer_name, color_index))
+           glyph_paths[glyph_name] = data.base_layer
+        for i, layer in enumerate(data.colored_layers):
+            layer_name = f'{glyph_name}.layer{i + 1}'
+            glyph_paths[layer_name] = layer.path
+            glyph_widths[layer_name] = data.width
+            try:
+                color_index = color_palettes.index(layer.color)
+            except ValueError:
+                color_index = len(color_palettes)
+                color_palettes.append(layer.color)
+            if glyph_name not in color_layers:
+                color_layers[glyph_name] = []
+            color_layers[glyph_name].append((layer_name, color_index))
     widest = max(x.width for x in char_data.values())
     tallest = max(x.height for x in char_data.values())
     font = fontTools.fontBuilder.FontBuilder(unitsPerEm = info.em, isTTF = True)
@@ -137,6 +138,7 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
     )
     epoch = datetime.datetime.fromisoformat('1904-01-01T00:00:00Z')
     font.setupHead(
+        unitsPerEm = info.em,
         xMin = 0,
         xMax = int(widest),
         yMin = -descent,

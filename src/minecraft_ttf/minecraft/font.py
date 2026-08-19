@@ -3,15 +3,14 @@ import datetime
 import typing
 
 import fontTools.fontBuilder
-import fontTools.ttLib.tables._g_l_y_f
 import fontTools.ttLib.tables.C_P_A_L_
 
 from minecraft_ttf.bitmap import Bitmap, bitmap_from_image, bitmaps_from_colors
 from minecraft_ttf.font import (
     CharInfo,
+    ColoredLayer,
     FontInfo,
     FontPositions,
-    GlyphLayer,
     make_font,
     vectorize,
 )
@@ -57,47 +56,50 @@ def create_fonts(
     def add_space_glyph(char: str, width: int):
         seen_chars.add(char)
         if 'regular' in styles:
-            fonts['regular'][char] = CharInfo(width = width * pixel_scale, height = 0, layers = [])
+            fonts['regular'][char] = CharInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'italic' in styles:
-            fonts['italic'][char] = CharInfo(width = width * pixel_scale, height = 0, layers = [])
+            fonts['italic'][char] = CharInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'bold' in styles:
-            fonts['bold'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, layers = [])
+            fonts['bold'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'bold_italic' in styles:
-            fonts['bold_italic'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, layers = [])
-    def add_bitmap_glyph(char: str, layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color | None]], height: int, ascent: int):
-        assert len(layers) > 0
-        assert all(mask.get_size() == layers[0][0].get_size() for mask, _ in layers)
-        m_width, m_height = layers[0][0].get_size()
+            fonts['bold_italic'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
+    def add_bitmap_glyph(char: str, base_layer: Bitmap, colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]], height: int, ascent: int):
+        base_size = base_layer.get_size()
+        assert all(mask.get_size() == base_size for mask, _ in colored_layers)
+        m_width, m_height = base_size
         seen_chars.add(char)
         scale = height / m_height * pixel_scale
         step_size = (0, 0) if height == 0 else (0, (height - ascent) / height * m_height)
         italic_step_size = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
         add_width = 0 if height == 0 else m_height / height
+        char_width = (m_width + add_width) * scale
+        char_height = m_height * scale
         def make_bold_mask(mask: Bitmap):
              bold_mask = Bitmap((m_width + 1, m_height))
              bold_mask.draw(mask, (0, 0))
              bold_mask.draw(mask, (1, 0))
              return bold_mask
-        bold_layers = [(make_bold_mask(mask), color) for mask, color in layers]
-        def make_char_info(paths: list[tuple[fontTools.ttLib.tables._g_l_y_f.Glyph | None, fontTools.ttLib.tables.C_P_A_L_.Color | None]]) -> CharInfo:
-            final: list[GlyphLayer] = []
-            for path, color in paths:
+        bold_base_layer = make_bold_mask(base_layer)
+        bold_colored_layers = [(make_bold_mask(mask), color) for mask, color in colored_layers]
+        def make_char_info(bold: bool, italic: bool):
+            base_mask = bold_base_layer if bold else base_layer
+            colored_masks = bold_colored_layers if bold else colored_layers
+            step = italic_step_size if italic else step_size
+            base_path = vectorize(base_mask, scale, step, italic=italic)
+            colored_paths: list[ColoredLayer] = []
+            for mask, color in colored_masks:
+                path = vectorize(mask, scale, step, italic=italic)
                 if path is not None:
-                    final.append(GlyphLayer(path, color))
-            chw = m_width + add_width
-            return CharInfo(width = chw * scale, height = m_height * scale, layers = final)
+                    colored_paths.append(ColoredLayer(path, color))
+            return CharInfo(char_width, char_height, base_path, colored_paths)
         if 'regular' in styles:
-            paths = [(vectorize(mask, scale, step_size), color) for mask, color in layers]
-            fonts['regular'][char] = make_char_info(paths)
+            fonts['regular'][char] = make_char_info(bold=False, italic=False)
         if 'italic' in styles:
-            paths = [(vectorize(mask, scale, italic_step_size, italic=True), color) for mask, color in layers]
-            fonts['italic'][char] = make_char_info(paths)
+            fonts['italic'][char] = make_char_info(bold=False, italic=True)
         if 'bold' in styles:
-            paths = [(vectorize(mask, scale, step_size), color) for mask, color in bold_layers]
-            fonts['bold'][char] = make_char_info(paths)
+            fonts['bold'][char] = make_char_info(bold=True, italic=False)
         if 'bold_italic' in styles:
-            paths = [(vectorize(mask, scale, italic_step_size, italic=True), color) for mask, color in bold_layers]
-            fonts['bold_italic'][char] = make_char_info(paths)
+            fonts['bold_italic'][char] = make_char_info(bold=True, italic=True)
     mw, mh = (5, 8)
     missing = Bitmap((mw, mh))
     if has_missing_glyph:
@@ -105,7 +107,7 @@ def create_fonts(
             for x in range(mw):
                 if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
                     missing.set_at((x, y), True)
-    add_bitmap_glyph('.notdef', [(missing, None)], height=8, ascent=8)
+    add_bitmap_glyph('.notdef', missing, [], height=8, ascent=8)
     for provider in provider_list:
         if provider.modified_date is not None:
             modified_date = max(modified_date, provider.modified_date)
@@ -118,7 +120,7 @@ def create_fonts(
             for char, bitmap in provider.chars.items():
                 if char in seen_chars:
                     continue
-                add_bitmap_glyph(char, [(bitmap, None)], height=provider.height, ascent=provider.ascent)
+                add_bitmap_glyph(char, bitmap, [], height=provider.height, ascent=provider.ascent)
         elif isinstance(provider, ImageProvider):
             glyph_width = provider.image.width // len(provider.chars[0])
             glyph_height = provider.image.height // len(provider.chars)
@@ -135,24 +137,24 @@ def create_fonts(
                         gy2 = (y + 1) * glyph_height
                         dimensions = (gx1, gy1, gx2, gy2)
                         glyph = provider.image.crop(dimensions)
-                        layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color | None]] = []
-                        full_mask = bitmap_from_image(glyph)
-                        if provider.has_color:
-                            color_planes = bitmaps_from_colors(glyph)
-                            layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
-                        else:
-                            layers.append((full_mask, None))
+                        colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]] = []
+                        base_mask = bitmap_from_image(glyph)
                         if provider.sizes is not None:
                             left, right = provider.sizes[char]
                         else:
                             left = 0
-                            box = full_mask.content_box()
+                            box = base_mask.content_box()
                             if box is None:
                                 right = 0
                             else:
                                 _left, _top, right, _bottom = box
-                        layers = [(mask.resized((left, 0, right, mask.height)), color) for mask, color in layers]
-                        add_bitmap_glyph(char, layers, height=provider.height, ascent=provider.ascent)
+                        resize_box = (left, 0, right, base_mask.height)
+                        if provider.has_color:
+                            color_planes = bitmaps_from_colors(glyph)
+                            colored_layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
+                        base_mask = base_mask.resized(resize_box)
+                        colored_layers = [(mask.resized(resize_box), color) for mask, color in colored_layers]
+                        add_bitmap_glyph(char, base_mask, colored_layers, height=provider.height, ascent=provider.ascent)
                     else:
                         add_space_glyph(char, 0)
     return CreatedFontInfo(fonts, font_em, created_date, modified_date)
