@@ -100,18 +100,68 @@ class Bitmap:
                 ufind[x_uf] = num_components
         return BitmapLabels(self.width, self.height, image, ufind, num_components)
 
+def get_palette_rgba(palette: list[int], transparent: int | None, pixel: int) -> tuple[int, int, int, int]:
+    r, g, b = palette[pixel * 3:pixel * 3 + 3]
+    a = 0 if transparent is not None and pixel == transparent else 255
+    return (r, g, b, a)
+
 def bitmap_from_image(image: PIL.Image.Image) -> Bitmap:
     mask = Bitmap(image.size)
+    if image.mode == 'RGB':
+        mask.invert()
+        return mask
+    pixels = image.load()
+    assert pixels is not None
+    transparent_index = image.info.get('transparency')
+    for y in range(image.height):
+        for x in range(image.width):
+            pixel = pixels[(x, y)]
+            if image.mode == 'P':
+                assert isinstance(pixel, int)
+                if transparent_index is None or pixel != transparent_index:
+                    mask.set_at((x, y), True)
+            elif image.mode == 'RGBA':
+                assert isinstance(pixel, tuple)
+                _r, _g, _b, a = pixel
+                if a >= 10:
+                    mask.set_at((x, y), True)
+            else:
+                raise ValueError(image.mode)
+    return mask
+
+def bitmaps_from_colors(image: PIL.Image.Image) -> list[tuple[Bitmap, tuple[int, int, int, int]]]:
+    color_results = image.getcolors(maxcolors = image.width * image.height)
+    assert color_results is not None
+    colors = [color for _count, color in color_results]
+    bitmaps: list[tuple[Bitmap, tuple[int, int, int, int]]] = []
+    if image.mode == 'P':
+        palette = image.getpalette()
+        assert palette is not None
+        transparent_index = image.info.get('transparency')
+        for color in colors:
+            assert isinstance(color, int)
+            rgba = get_palette_rgba(palette, transparent_index, color)
+            bitmaps.append((Bitmap(image.size), rgba))
+    elif image.mode == 'RGBA':
+        for color in colors:
+            assert isinstance(color, tuple)
+            r, g, b, a =color
+            bitmaps.append((Bitmap(image.size), (r, g, b, a)))
+    elif image.mode == 'RGB':
+        for color in colors:
+            assert isinstance(color, tuple)
+            r, g, b =color
+            bitmaps.append((Bitmap(image.size), (r, g, b, 255)))
+    else:
+        raise ValueError(image.mode)
     pixels = image.load()
     assert pixels is not None
     for y in range(image.height):
         for x in range(image.width):
             pixel = pixels[(x, y)]
-            assert isinstance(pixel, tuple)
-            _r, _g, _b, a = pixel
-            if a >= 10:
-                mask.set_at((x, y), True)
-    return mask
+            index = colors.index(pixel)
+            bitmaps[index][0].set_at((x, y), True)
+    return bitmaps
 
 def cc_label(mask: Bitmap, image: list[int], ufind: list[int], largest: list[int]) -> int:
     w = mask.width

@@ -9,7 +9,7 @@ import zipfile
 import bitarray
 import PIL.Image
 
-from minecraft_ttf.bitmap import Bitmap
+from minecraft_ttf.bitmap import Bitmap, get_palette_rgba
 from minecraft_ttf.minecraft.storage import StackStorage, Storage, zip_time
 from minecraft_ttf.minecraft.versions import MinecraftVersion
 
@@ -19,6 +19,7 @@ class ImageProvider:
     height: int
     ascent: int
     image: PIL.Image.Image
+    has_color: bool
     chars: list[list[str | None]]
     sizes: dict[str, tuple[int, int]] | None
     modified_date: datetime.datetime | None
@@ -71,7 +72,15 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
                 empty
             ]
             date = date_max([img_data.modified_date, font_data.modified_date])
-        bitmap = ImageProvider(height=8, ascent=7, image=img_data.data, chars=filter_nul(chars), sizes=None, modified_date=date)
+        bitmap = ImageProvider(
+            height = 8,
+            ascent = 7,
+            image = img_data.data,
+            has_color = image_has_color(img_data.data),
+            chars = filter_nul(chars),
+            sizes = None,
+            modified_date = date
+        )
         providers.append(bitmap)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
@@ -83,6 +92,30 @@ def get_providers(store: Storage, version: MinecraftVersion, identifier: str) ->
         converted = legacy_unicode(store, sheet_entries, size_bytes, size_date)
         providers.extend(converted)
     return providers
+
+def image_has_color(image: PIL.Image.Image) -> bool:
+    colors = image.getcolors(maxcolors = 3)
+    if colors is None or len(colors) >= 3:
+        return True
+    palette = image.getpalette()
+    transparent_index = image.info.get('transparency')
+    for _count, color in colors:
+        if image.mode == 'P':
+            assert palette is not None
+            assert isinstance(color, int)
+            r, g, b, a = get_palette_rgba(palette, transparent_index, color)
+        elif image.mode == 'RGB':
+            assert isinstance(color, tuple)
+            r, g, b = color
+            a = 255
+        elif image.mode == 'RGBA':
+            assert isinstance(color, tuple)
+            r, g, b, a = color
+        else:
+            raise ValueError(image.mode)
+        if a != 0 and not (r == 255 and g == 255 and b == 255):
+            return True
+    return False
 
 FontFilter = typing.TypedDict('FontFilter', {
     'uniform': typing.NotRequired[bool],
@@ -200,12 +233,13 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                 img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
                 img_data = read_image(store, img_entry)
                 full = ImageProvider(
-                    height=provider.get('height', 8),
-                    ascent=provider['ascent'],
-                    image=img_data.data,
-                    chars=filter_nul(provider['chars']),
-                    sizes=None,
-                    modified_date=date_max([modified_date, img_data.modified_date])
+                    height = provider.get('height', 8),
+                    ascent = provider['ascent'],
+                    image = img_data.data,
+                    has_color = image_has_color(img_data.data),
+                    chars = filter_nul(provider['chars']),
+                    sizes = None,
+                    modified_date = date_max([modified_date, img_data.modified_date])
                 )
                 result.append(full)
             case 'space':
@@ -279,12 +313,13 @@ def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: b
             sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf + 1) for i, x in enumerate(size_range) if x > 0}
             img_data = read_image(store, sheet_entry)
             full = ImageProvider(
-                height=8,
-                ascent=7,
-                image=img_data.data,
-                chars=chars,
-                sizes=sizes,
-                modified_date=date_max([modified_date, img_data.modified_date])
+                height = 8,
+                ascent = 7,
+                image = img_data.data,
+                has_color = image_has_color(img_data.data),
+                chars = chars,
+                sizes = sizes,
+                modified_date = date_max([modified_date, img_data.modified_date])
             )
             result.append(full)
     return result

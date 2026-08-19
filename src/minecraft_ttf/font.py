@@ -4,15 +4,21 @@ import datetime
 import fontTools.fontBuilder
 import fontTools.pens.ttGlyphPen
 import fontTools.ttLib.tables._g_l_y_f
+import fontTools.ttLib.tables.C_P_A_L_
 
 from minecraft_ttf.bitmap import Bitmap, BitmapLabels
 
 
 @dataclasses.dataclass
+class GlyphLayer:
+    path: fontTools.pens.ttGlyphPen.Glyph
+    color: fontTools.ttLib.tables.C_P_A_L_.Color | None
+
+@dataclasses.dataclass
 class CharInfo:
     width: float
     height: float
-    path: fontTools.pens.ttGlyphPen.Glyph | None
+    layers: list[GlyphLayer]
 
 @dataclasses.dataclass
 class FontPositions:
@@ -51,37 +57,52 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
         'sampleText': info.sample
     }
     empty_glyph = fontTools.ttLib.tables._g_l_y_f.Glyph()
-    defined_glyphs = ['.notdef', '.null']
     codepoints: dict[int, str] = {}
-    char_widths: dict[str, float] = {'.notdef': 0, '.null': 0}
-    char_paths: dict[str, fontTools.pens.ttGlyphPen.Glyph] = {'.notdef': empty_glyph, '.null': empty_glyph}
+    glyph_widths: dict[str, float] = {'.notdef': 0, '.null': 0}
+    glyph_paths: dict[str, fontTools.pens.ttGlyphPen.Glyph] = {'.notdef': empty_glyph, '.null': empty_glyph}
+    color_palettes: list[fontTools.ttLib.tables.C_P_A_L_.Color] = []
+    color_layers: dict[str, list[tuple[str, int]]] = {}
     for char, data in char_data.items():
         if char not in ('.notdef', '.null'):
-            char_name = aglfn.get(char, 'uni' + format(ord(char), '04x'))
-            defined_glyphs.append(char_name)
-            codepoints[ord(char)] = char_name
+            glyph_name = aglfn.get(char, f'uni{ord(char):04x}')
+            codepoints[ord(char)] = glyph_name
         else:
-            char_name = char
-        char_widths[char_name] = data.width
-        if data.path is not None:
-            char_paths[char_name] = data.path
+            glyph_name = char
+        glyph_widths[glyph_name] = data.width
+        if len(data.layers) == 0:
+            glyph_paths[glyph_name] = empty_glyph
         else:
-            char_paths[char_name] = empty_glyph
+            for i, layer in enumerate(data.layers):
+                layer_name = glyph_name if i == 0 else f'{glyph_name}.layer{i}'
+                glyph_paths[layer_name] = layer.path
+                glyph_widths[layer_name] = data.width
+                if layer.color is not None:
+                    try:
+                        color_index = color_palettes.index(layer.color)
+                    except ValueError:
+                        color_index = len(color_palettes)
+                        color_palettes.append(layer.color)
+                    if glyph_name not in color_layers:
+                        color_layers[glyph_name] = []
+                    color_layers[glyph_name].append((layer_name, color_index))
     widest = max(x.width for x in char_data.values())
     tallest = max(x.height for x in char_data.values())
     font = fontTools.fontBuilder.FontBuilder(unitsPerEm = info.em, isTTF = True)
-    font.setupGlyphOrder(defined_glyphs)
+    font.setupGlyphOrder(list(glyph_paths.keys()))
     font.setupCharacterMap(codepoints)
-    font.setupGlyf(char_paths)
+    font.setupGlyf(glyph_paths)
+    if len(color_palettes) > 0:
+        font.setupCPAL([color_palettes])
+        font.setupCOLR(color_layers)
     metrics = {}
     glyphTable = font.font['glyf']
     assert isinstance(glyphTable, fontTools.ttLib.tables._g_l_y_f.table__g_l_y_f)
-    for gn, advanceWidth in char_widths.items():
+    for gn, advanceWidth in glyph_widths.items():
         metrics[gn] = (advanceWidth, glyphTable[gn].xMin)
     font.setupHorizontalMetrics(metrics)
     ascent = int(info.em * positions.ascent)
     descent = int(info.em * positions.descent)
-    font.setupHorizontalHeader(ascent=ascent, descent=-descent)
+    font.setupHorizontalHeader(ascent = ascent, descent = -descent)
     font.setupNameTable(nameStrings)
     fs_selection = 0
     mac_style = 0
@@ -115,7 +136,7 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
        italicAngle = positions.italicAngle if info.italic else 0
     )
     epoch = datetime.datetime.fromisoformat('1904-01-01T00:00:00Z')
-    font.updateHead(
+    font.setupHead(
         xMin = 0,
         xMax = int(widest),
         yMin = -descent,
