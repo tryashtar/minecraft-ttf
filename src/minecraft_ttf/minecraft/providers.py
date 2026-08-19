@@ -4,11 +4,13 @@ import io
 import json
 import pathlib
 import typing
+import zipfile
 
+import bitarray
 import PIL.Image
 
 from minecraft_ttf.bitmap import Bitmap
-from minecraft_ttf.minecraft.storage import StackStorage, Storage
+from minecraft_ttf.minecraft.storage import StackStorage, Storage, zip_time
 from minecraft_ttf.minecraft.versions import MinecraftVersion
 
 
@@ -25,7 +27,7 @@ class ImageProvider:
 class BitmapProvider:
     height: int
     ascent: int
-    chars: dict[str, tuple[Bitmap, tuple[int, int]]]
+    chars: dict[str, Bitmap]
     modified_date: datetime.datetime | None
 
 @dataclasses.dataclass
@@ -225,8 +227,47 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                 converted = legacy_unicode(store, sheet_entries, size_bytes, date_max([modified_date, size_date]))
                 result.extend(converted)
             case 'unihex':
-                pass
+                hex_entry = identifier_to_entry(provider['hex_file'], kind=None, suffix=None)
+                dates = [store.modified_time(hex_entry)]
+                hex_bytes = store.read(hex_entry)
+                hex_list: list[str] = []
+                with zipfile.ZipFile(io.BytesIO(hex_bytes), 'r') as zip:
+                    for entry in zip.namelist():
+                        if entry.endswith('.hex'):
+                            stats = zip.getinfo(entry)
+                            dates.append(zip_time(stats.date_time))
+                            hex_list.extend(zip.read(entry).decode('utf-8').split('\n'))
+                chars: dict[str, Bitmap] = {}
+                for entry in hex_list:
+                    if len(entry) > 0:
+                        char, bitmap = unihex(entry)                        
+                        left, right = char_size(char, bitmap, provider.get('size_overrides', []))
+                        chars[char] = bitmap.resized((left, 0, right, bitmap.height))
+                full = BitmapProvider(height=8, ascent=7, chars=chars, modified_date=date_max(dates))
+                result.append(full)
     return result
+
+def char_size(char: str, bitmap: Bitmap, overrides: list[UnihexSizeOverride]) -> tuple[int, int]:
+    for entry in overrides:
+        if char >= entry['from'] and char <= entry['to']:
+            return (entry['left'], entry['right'] + 1)
+    box = bitmap.content_box()
+    if box is None:
+        return (0, 0)
+    left, _top, right, _bottom = box
+    return (left, right)
+
+def unihex(line: str) -> tuple[str, Bitmap]:
+    char_code, art = line.split(':', maxsplit=1)
+    char = chr(int(char_code, 16))
+    bits = bytes.fromhex(art)
+    if len(art) == 64:
+        size = (16, 16)
+    else:
+        size = (8, 16)
+    bitmap = Bitmap(size)
+    bitmap.bits = bitarray.bitarray(bits)
+    return (char, bitmap)
 
 def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, modified_date: datetime.datetime | None) -> list[ImageProvider]:
     result: list[ImageProvider] = []
@@ -235,7 +276,7 @@ def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: b
             char_offset = sheet_id * 256
             chars = [[chr(x) if size_bytes[x] > 0 and x < 0xffff else None for x in range(char_offset + y * 16, char_offset + y * 16 + 16)] for y in range(16)]
             size_range = size_bytes[char_offset:char_offset + 256]
-            sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf) for i, x in enumerate(size_range) if x > 0}
+            sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf + 1) for i, x in enumerate(size_range) if x > 0}
             img_data = read_image(store, sheet_entry)
             full = ImageProvider(
                 height=8,

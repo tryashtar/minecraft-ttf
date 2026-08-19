@@ -233,59 +233,62 @@ def collinear(p1: tuple[int, int], p2: tuple[int, int], p3: tuple[int, int]) -> 
     x2, y2 = p3[0] - p1[0], p3[1] - p1[1]
     return abs(x1 * y2 - x2 * y1) < 1e-12
 
-def vectorize(mask: Bitmap, scale: float, step_size: tuple[float, float], italic: bool=False) -> tuple[fontTools.ttLib.tables._g_l_y_f.Glyph | None, tuple[int, int]]:
-    ox, oy = step_size
-    _width, height = mask.get_size()
-    pen = fontTools.pens.ttGlyphPen.TTGlyphPen(None)
-    @dataclasses.dataclass
-    class PenPos:
-        current: tuple[int, int] | None
-        next: tuple[int, int] | None
-    pen_pos = PenPos(None, None)
-    def draw_last():
-        if pen_pos.next is not None:
-            x, y = pen_pos.next
-            x += ox
-            y += oy
-            if italic:
-                x += (height - y) / 4
-            pen.lineTo((x * scale, (height - y) * scale))
-            pen_pos.current = pen_pos.next
-            pen_pos.next = None
-    def move_pen(point: tuple[int, int]):
-        draw_last()
-        pen_pos.current = point
-        pen_pos.next = None
-        x, y = point
+@dataclasses.dataclass
+class TrackingPen:
+    pen: fontTools.pens.ttGlyphPen.TTGlyphPen
+    step_size: tuple[float, float]
+    current: tuple[int, int]
+    next: tuple[int, int] | None
+
+def draw_last(pen: TrackingPen, italic: bool, height: int, scale: float):
+    if pen.next is not None:
+        ox, oy = pen.step_size
+        x, y = pen.next
         x += ox
         y += oy
         if italic:
             x += (height - y) / 4
-        pen.moveTo((x * scale, (height - y) * scale))
-    def line_pen(point: tuple[int, int]):
-        assert pen_pos.current is not None
-        if pen_pos.next is not None and not collinear(pen_pos.current, pen_pos.next, point):
-            draw_last()
-        pen_pos.next = point
+        pen.pen.lineTo((x * scale, (height - y) * scale))
+        pen.current = pen.next
+        pen.next = None
+
+def move_pen(pen: TrackingPen, point: tuple[int, int], italic: bool, height: int, scale: float):
+    draw_last(pen, italic, height, scale)
+    pen.current = point
+    pen.next = None
+    ox, oy = pen.step_size
+    x, y = point
+    x += ox
+    y += oy
+    if italic:
+        x += (height - y) / 4
+    pen.pen.moveTo((x * scale, (height - y) * scale))
+
+def line_pen(pen: TrackingPen, point: tuple[int, int], italic: bool, height: int, scale: float):
+    if pen.next is not None and not collinear(pen.current, pen.next, point):
+        draw_last(pen, italic, height, scale)
+    pen.next = point
+
+def vectorize(mask: Bitmap, scale: float, step_size: tuple[float, float], italic: bool=False) -> fontTools.ttLib.tables._g_l_y_f.Glyph | None:
     labels = mask.label()
     filled, empty = separate_regions(mask, labels)
     if len(filled) == 0:
-        return (None, (0, 0))
-    else:
-        rects = labels.get_bounding_rects()
-        size = (max(x.x + x.w for x in rects), max(x.y for x in rects))
-        for region in filled:
-            outline_points = outline(region)
-            move_pen(outline_points[0])
-            for point in outline_points[1:]:
-                line_pen(point)
-            pen_pos.next = None
-            pen.closePath()
-        for region in empty:
-            outline_points = list(reversed(outline(region)))
-            move_pen(outline_points[0])
-            for point in outline_points[1:]:
-                line_pen(point)
-            pen_pos.next = None
-            pen.closePath()
-    return (pen.glyph(), size)
+        return None
+    _width, height = mask.get_size()
+    glyph_pen = fontTools.pens.ttGlyphPen.TTGlyphPen(None)
+    pen = TrackingPen(glyph_pen, step_size, (0, 0), None)
+    for region in filled:
+        outline_points = outline(region)
+        move_pen(pen, outline_points[0], italic, height, scale)
+        for point in outline_points[1:]:
+            line_pen(pen, point, italic, height, scale)
+        pen.next = None
+        pen.pen.closePath()
+    for region in empty:
+        outline_points = list(reversed(outline(region)))
+        move_pen(pen, outline_points[0], italic, height, scale)
+        for point in outline_points[1:]:
+            line_pen(pen, point, italic, height, scale)
+        pen.next = None
+        pen.pen.closePath()
+    return pen.pen.glyph()

@@ -5,40 +5,12 @@ import PIL.Image
 
 
 @dataclasses.dataclass
-class Rect:
-    x: int
-    y: int
-    w: int
-    h: int
-
-@dataclasses.dataclass
 class BitmapLabels:
     width: int
     height: int
     image: list[int]
     ufind: list[int]
     num_components: int
-
-    def get_bounding_rects(self) -> list[Rect]:
-        if self.num_components == 0:
-            return []
-        rects: list[Rect | None] = [None] * (self.num_components + 1)
-        for i, label in enumerate(self.image):
-            component = self.ufind[label]
-            if component == 0:
-                continue
-            y, x = divmod(i, self.width)
-            rect = rects[component]
-            if rect is None:
-                rects[component] = Rect(x, y, 1, 1)
-            else:
-                right = max(rect.x + rect.w, x + 1)
-                bottom = max(rect.y + rect.h, y + 1)
-                rect.x = min(rect.x, x)
-                rect.y = min(rect.y, y)
-                rect.w = right - rect.x
-                rect.h = bottom - rect.y
-        return [x for x in rects[1:] if x is not None]
 
     def connected_components(self) -> list['Bitmap']:
         if self.num_components == 0:
@@ -74,6 +46,32 @@ class Bitmap:
 
     def get_at(self, pos: tuple[int, int]) -> bool:
         return self.bits[self.get_index(pos)] == 1
+
+    def content_box(self)-> tuple[int, int, int, int] | None:
+        left = self.width
+        top = self.height
+        right = 0
+        bottom = 0
+        for y in range(self.height):
+            for x in range(self.width):
+                if self.get_at((x, y)):
+                    left = min(left, x)
+                    top = min(top, y)
+                    right = max(right, x + 1)
+                    bottom = max(bottom, y + 1)
+        if left == self.width:
+            return None
+        return (left, top, right, bottom)
+
+    def resized(self, box: tuple[int, int, int, int]) -> 'Bitmap':
+        left, top, right, bottom = box
+        result = Bitmap((right - left, bottom - top))
+        for y in range(top, bottom):
+            for x in range(left, right):
+                dest = self.get_index((x, y))
+                if dest >= 0 and dest < len(self.bits) and self.bits[dest] == 1:
+                    result.set_at((x - left, y - top), True)
+        return result
 
     def invert(self):
         self.bits.invert()
@@ -121,6 +119,8 @@ def cc_label(mask: Bitmap, image: list[int], ufind: list[int], largest: list[int
     bits = mask.bits
     label = 0
     ufind[0] = 0
+    if len(bits) == 0:
+        return label
 
     def find(x: int) -> int:
         while ufind[x] < x:

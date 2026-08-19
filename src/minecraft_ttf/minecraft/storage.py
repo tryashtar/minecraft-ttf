@@ -69,10 +69,10 @@ class ZipStorage(Storage):
     @typing.override
     def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime:
         stats = self.zip.getinfo(entry.as_posix())
-        time = jar_time(stats.date_time)
+        time = zip_time(stats.date_time)
         return time
 
-def jar_time(jartime: tuple) -> datetime.datetime:
+def zip_time(jartime: tuple) -> datetime.datetime:
      y, m, d, h, mm, s = jartime
      return datetime.datetime(y, m, d, h, mm, s, 0, tzinfo=datetime.UTC)
 

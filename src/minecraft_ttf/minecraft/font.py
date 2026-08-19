@@ -46,8 +46,6 @@ def create_fonts(
     chatbox_height = 12
     font_em = 1200
     pixel_scale = font_em / chatbox_height
-    # font textures have a color depth of 1 bit, so they are just 2D bitmasks
-    # this lets us leverage some efficient operations provided by pygame
     def add_space_glyph(char: str, width: int):
         seen_chars.add(char)
         if 'regular' in styles:
@@ -58,7 +56,7 @@ def create_fonts(
             fonts['bold'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, path = None)
         if 'bold_italic' in styles:
             fonts['bold_italic'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, path = None)
-    def add_bitmap_glyph(char: str, mask: Bitmap, height: int, ascent: int, char_size: tuple[int, int] | None):
+    def add_bitmap_glyph(char: str, mask: Bitmap, height: int, ascent: int):
         m_width, m_height = mask.get_size()
         seen_chars.add(char)
         # bold characters are created by overlapping two copies of the texture
@@ -69,27 +67,21 @@ def create_fonts(
         step_size = (0, 0) if height == 0 else (0, (height - ascent) / height * m_height)
         italic_step_size = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
         add_width = 0 if height == 0 else m_height / height
-        def make_char_info(path: fontTools.ttLib.tables._g_l_y_f.Glyph | None, size: tuple[int, int]) -> CharInfo:
-            w, h = size
-            if char_size is not None:
-                l, r = char_size
-                w = r - l + 1
-                if w % 2 == 1:
-                    w -= 1
-            chw = w + add_width
-            return CharInfo(width = chw * scale, height = h * scale, path = path)
+        def make_char_info(path: fontTools.ttLib.tables._g_l_y_f.Glyph | None) -> CharInfo:
+            chw = m_width + add_width
+            return CharInfo(width = chw * scale, height = m_height * scale, path = path)
         if 'regular' in styles:
-            path, size = vectorize(mask, scale, step_size)
-            fonts['regular'][char] = make_char_info(path, size)
+            path = vectorize(mask, scale, step_size)
+            fonts['regular'][char] = make_char_info(path)
         if 'italic' in styles:
-            path, size = vectorize(mask, scale, italic_step_size, italic=True)
-            fonts['italic'][char] = make_char_info(path, size)
+            path = vectorize(mask, scale, italic_step_size, italic=True)
+            fonts['italic'][char] = make_char_info(path)
         if 'bold' in styles:
-            path, size = vectorize(bold_mask, scale, step_size)
-            fonts['bold'][char] = make_char_info(path, size)
+            path = vectorize(bold_mask, scale, step_size)
+            fonts['bold'][char] = make_char_info(path)
         if 'bold_italic' in styles:
-            path, size = vectorize(bold_mask, scale, italic_step_size, italic=True)
-            fonts['bold_italic'][char] = make_char_info(path, size)
+            path = vectorize(bold_mask, scale, italic_step_size, italic=True)
+            fonts['bold_italic'][char] = make_char_info(path)
     mw, mh = (5, 8)
     missing = Bitmap((mw, mh))
     if has_missing_glyph:
@@ -97,7 +89,7 @@ def create_fonts(
             for x in range(mw):
                 if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
                     missing.set_at((x, y), True)
-    add_bitmap_glyph('.notdef', missing, height=8, ascent=8, char_size=None)
+    add_bitmap_glyph('.notdef', missing, height=8, ascent=8)
     for provider in provider_list:
         if provider.modified_date is not None:
             modified_date = max(modified_date, provider.modified_date)
@@ -107,10 +99,10 @@ def create_fonts(
                     continue
                 add_space_glyph(char, max(0, width))
         elif isinstance(provider, BitmapProvider):
-            for char, (bitmap, size) in provider.chars.items():
+            for char, bitmap in provider.chars.items():
                 if char in seen_chars:
                     continue
-                add_bitmap_glyph(char, bitmap, height=provider.height, ascent=provider.ascent, char_size=size)
+                add_bitmap_glyph(char, bitmap, height=provider.height, ascent=provider.ascent)
         elif isinstance(provider, ImageProvider):
             glyph_width = provider.image.width // len(provider.chars[0])
             glyph_height = provider.image.height // len(provider.chars)
@@ -125,17 +117,21 @@ def create_fonts(
                         gy1 = y * glyph_height
                         gx2 = (x + 1) * glyph_width
                         gy2 = (y + 1) * glyph_height
-                        if provider.sizes is not None:
-                            size = provider.sizes[char]
-                            left, right = size
-                            gx1 += left
-                            gx2 = gx1 + right + 1
-                        else:
-                            size = None
                         dimensions = (gx1, gy1, gx2, gy2)
                         glyph = provider.image.crop(dimensions).convert('RGBA')
                         mask = bitmap_from_image(glyph)
-                        add_bitmap_glyph(char, mask, height=provider.height, ascent=provider.ascent, char_size=size)
+                        if provider.sizes is not None:
+                            left, right = provider.sizes[char]
+                            cropped = mask.resized((left, 0, right, mask.height))
+                            add_bitmap_glyph(char, cropped, height=provider.height, ascent=provider.ascent)
+                        else:
+                            box = mask.content_box()
+                            if box is None:
+                                right = 0
+                            else:
+                                _left, _top, right, _bottom = box
+                            cropped = mask.resized((0, 0, right, mask.height))
+                            add_bitmap_glyph(char, cropped, height=provider.height, ascent=provider.ascent)
                     else:
                         add_space_glyph(char, 0)
     return CreatedFontInfo(fonts, font_em, created_date, modified_date)
