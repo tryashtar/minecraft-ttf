@@ -124,10 +124,11 @@ AssetSource = typing.TypedDict('AssetSource', {
 })
 
 class AssetStorage(Storage):
-    def __init__(self, server: str, prefix: pathlib.PurePath, source: AssetSource):
+    def __init__(self, server: str, prefix: pathlib.PurePath, source: AssetSource, cache: pathlib.Path):
         self.server = server
         self.prefix = prefix
         self.source = source
+        self.cache = cache
 
     @typing.override
     def get_entries(self, prefix: pathlib.PurePath) -> list[pathlib.PurePath]:
@@ -138,10 +139,16 @@ class AssetStorage(Storage):
     def read(self, entry: pathlib.PurePath) -> bytes:
         modified = entry.relative_to(self.prefix).as_posix()
         hash = self.source['objects'][modified]['hash']
+        cached = self.cache / hash
+        if cached.exists():
+            return cached.read_bytes()
         url = f'{self.server}/{hash[:2]}/{hash}'
         response = requests.get(url)
         response.raise_for_status()
-        return response.content
+        data = response.content
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(data)
+        return data
 
     @typing.override
     def exists(self, entry: pathlib.PurePath) -> bool:

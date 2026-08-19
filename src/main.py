@@ -89,7 +89,7 @@ def main_vanilla_generate(version_id: str, identifiers: set[DEFAULT_IDENTIFIERS]
     print(f'Converting fonts from Minecraft {info.manifest['id']}')
     with info.jar:
         jar_storage = ZipStorage(info.jar)
-        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets)
+        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets, cache / 'assets' / info.launcher['assetIndex']['id'])
         store = StackStorage([jar_storage, asset_storage])
         for identifier in identifiers:
             name, date = default_font_info(identifier)
@@ -202,6 +202,7 @@ LauncherData = typing.TypedDict('LauncherData', {
 class JarInformation:
     jar: zipfile.ZipFile
     manifest: ManifestVersion
+    launcher: LauncherData
     assets: AssetSource
     version: MinecraftVersion
 
@@ -222,7 +223,7 @@ def jar_info(version_id: str, cache: pathlib.Path) -> JarInformation | None:
     if version is None:
         print('Unable to determine capabilities of jar!')
         return None
-    return JarInformation(zip, version_data, assets, version)
+    return JarInformation(zip, version_data, launcher_data, assets, version)
 
 def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path):
     pack_storage = get_storage(location)
@@ -235,7 +236,7 @@ def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path)
     print(f'Available font identifiers in resource pack {location.name} on Minecraft {info.manifest['id']}:')
     with info.jar:
         jar_storage = ZipStorage(info.jar)
-        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets)
+        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets, cache / 'assets' / info.launcher['assetIndex']['id'])
         store = StackStorage([jar_storage, asset_storage, pack_storage])
         identifiers = available_identifiers(info.version, store)
     for identifier in identifiers:
@@ -270,7 +271,7 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
     print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {info.manifest['id']}')
     with info.jar:
         jar_storage = ZipStorage(info.jar)
-        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets)
+        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets, cache / 'assets' / info.launcher['assetIndex']['id'])
         store = StackStorage([jar_storage, asset_storage, pack_storage])
         provider_list = get_providers(store, info.version, identifier)
         if provider_list is None:
