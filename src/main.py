@@ -3,13 +3,14 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import math
 import pathlib
 import typing
 import zipfile
 
 import requests
 
-from minecraft_ttf.font import CharInfo
+from minecraft_ttf.font import GlyphInfo
 from minecraft_ttf.minecraft.font import STYLES, create_fonts, finalize_font, style_info
 from minecraft_ttf.minecraft.providers import get_providers
 from minecraft_ttf.minecraft.storage import (
@@ -96,7 +97,7 @@ def main_vanilla_generate(version_id: str, identifiers: set[DEFAULT_IDENTIFIERS]
             vanilla_try_font(name, identifier, info.version, store, date, styles, aglfn, output)
     print('Done!')
 
-def font_digest(font: dict[str, CharInfo]) -> str:
+def font_digest(font: dict[str, GlyphInfo]) -> str:
     alg = hashlib.sha1()
     for char, data in font.items():
         string = f'{char}_{data.width}_{data.height}'
@@ -133,12 +134,12 @@ def main_vanilla_history(start: str | None, end: str | None, identifiers: set[DE
                 name, date = default_font_info(identifier)
                 fonts = create_fonts(provider_list, version.supports_providers, date, styles)
                 for style, font in fonts.fonts.items():
-                    hash = font_digest(font)
+                    hash = font_digest(font.chars) + font_digest(font.other_glyphs)
                     if hash not in seen_hashes:
                         seen_hashes.add(hash)
                         print(f'{version_data['id']} ({version.name}): {identifier} ({style}) changed')
                         full_name = 'Minecraft ' + name
-                        ttf = finalize_font(full_name, style, font, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
+                        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
                         dest = output / f'{identifier.split(':')[1]}-{style}-{version_data['id']}.ttf'
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         ttf.save(dest)
@@ -162,7 +163,7 @@ def vanilla_try_font(
     fonts = create_fonts(provider_list, version.supports_providers, created_date, styles)
     for style, font in fonts.fonts.items():
         full_name = 'Minecraft ' + name
-        ttf = finalize_font(full_name, style, font, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
+        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
         ttf_name = full_name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
         dest = out / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -282,8 +283,23 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
             return
         created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
         fonts = create_fonts(provider_list, info.version.supports_providers, created_date, styles)
+        point_sizes: dict[int, list[str]] = {}
+        for (num, denom), chars in fonts.scales.items():
+            top = num * 12
+            gcd = math.gcd(top, denom)
+            point_size = top // gcd
+            if point_size not in point_sizes:
+                point_sizes[point_size] = []
+            point_sizes[point_size].extend(chars)
+        for point, chars in point_sizes.items():
+            if len(chars) <= 30:
+                print(f'{len(chars)} characters in this font ({''.join(chars)}) will look pixel-perfect at font size multiples of {point}')
+            else:
+                print(f'{len(chars)} characters in this font will look pixel-perfect at font size multiples of {point}')
+        lcm = math.lcm(*point_sizes.keys())
+        print(f'All characters in this font will look pixel-perfect at font size multiples of {lcm}')
         for style, font in fonts.fonts.items():
-            ttf = finalize_font(name, style, font, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
+            ttf = finalize_font(name, style, font.chars, font.other_glyphs, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
             ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
             dest = out / f'{ttf_name}.ttf'
             dest.parent.mkdir(parents=True, exist_ok=True)

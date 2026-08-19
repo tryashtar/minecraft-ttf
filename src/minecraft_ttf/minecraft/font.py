@@ -7,10 +7,10 @@ import fontTools.ttLib.tables.C_P_A_L_
 
 from minecraft_ttf.bitmap import Bitmap, bitmap_from_image, bitmaps_from_colors
 from minecraft_ttf.font import (
-    CharInfo,
     ColoredLayer,
     FontInfo,
     FontPositions,
+    GlyphInfo,
     make_font,
     vectorize,
 )
@@ -33,11 +33,19 @@ def style_info(style: STYLES) -> tuple[str, bool, bool]:
     return cache[style]
 
 @dataclasses.dataclass
+class FontStyleInfo:
+    chars: dict[str, GlyphInfo]
+    other_glyphs: dict[str, GlyphInfo]
+
+@dataclasses.dataclass
 class CreatedFontInfo:
-    fonts: dict[STYLES, dict[str, CharInfo]]
+    fonts: dict[STYLES, FontStyleInfo]
+    scales: dict[tuple[int, int], list[str]]
     font_em: int
     created_date: datetime.datetime
     modified_date: datetime.datetime
+
+type PICKER = typing.Callable[[FontStyleInfo], dict[str, GlyphInfo]]
 
 def create_fonts(
     provider_list: list[Provider],
@@ -47,27 +55,32 @@ def create_fonts(
 ) -> CreatedFontInfo:
     modified_date = created_date
     seen_chars: set[str] = set()
-    fonts: dict[STYLES, dict[str, CharInfo]] = {}
+    scales: dict[tuple[int, int], list[str]] = {}
+    fonts: dict[STYLES, FontStyleInfo] = {}
     for style in styles:
-       fonts[style] = {}
+        fonts[style] = FontStyleInfo(chars={}, other_glyphs={})
     chatbox_height = 12
     font_em = 1200
     pixel_scale = font_em / chatbox_height
-    def add_space_glyph(char: str, width: int):
+    def add_space_glyph(picker: PICKER, char: str, width: int):
         seen_chars.add(char)
         if 'regular' in styles:
-            fonts['regular'][char] = CharInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
+            picker(fonts['regular'])[char] = GlyphInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'italic' in styles:
-            fonts['italic'][char] = CharInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
+            picker(fonts['italic'])[char] = GlyphInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'bold' in styles:
-            fonts['bold'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
+            picker(fonts['bold'])[char] = GlyphInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'bold_italic' in styles:
-            fonts['bold_italic'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
-    def add_bitmap_glyph(char: str, base_layer: Bitmap, colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]], height: int, ascent: int):
+            picker(fonts['bold_italic'])[char] = GlyphInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
+    def add_bitmap_glyph(picker: PICKER, char: str, base_layer: Bitmap, colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]], height: int, ascent: int):
         base_size = base_layer.get_size()
         assert all(mask.get_size() == base_size for mask, _ in colored_layers)
         m_width, m_height = base_size
         seen_chars.add(char)
+        height_ratio = (m_height, height)
+        if height_ratio not in scales:
+            scales[height_ratio] = []
+        scales[height_ratio].append(char)
         scale = height / m_height * pixel_scale
         step_size = (0, 0) if height == 0 else (0, (height - ascent) / height * m_height)
         italic_step_size = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
@@ -91,15 +104,15 @@ def create_fonts(
                 path = vectorize(mask, scale, step, italic=italic)
                 if path is not None:
                     colored_paths.append(ColoredLayer(path, color))
-            return CharInfo(char_width, char_height, base_path, colored_paths)
+            return GlyphInfo(char_width, char_height, base_path, colored_paths)
         if 'regular' in styles:
-            fonts['regular'][char] = make_char_info(bold=False, italic=False)
+            picker(fonts['regular'])[char] = make_char_info(bold=False, italic=False)
         if 'italic' in styles:
-            fonts['italic'][char] = make_char_info(bold=False, italic=True)
+            picker(fonts['italic'])[char] = make_char_info(bold=False, italic=True)
         if 'bold' in styles:
-            fonts['bold'][char] = make_char_info(bold=True, italic=False)
+            picker(fonts['bold'])[char] = make_char_info(bold=True, italic=False)
         if 'bold_italic' in styles:
-            fonts['bold_italic'][char] = make_char_info(bold=True, italic=True)
+            picker(fonts['bold_italic'])[char] = make_char_info(bold=True, italic=True)
     mw, mh = (5, 8)
     missing = Bitmap((mw, mh))
     if has_missing_glyph:
@@ -107,7 +120,7 @@ def create_fonts(
             for x in range(mw):
                 if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
                     missing.set_at((x, y), True)
-    add_bitmap_glyph('.notdef', missing, [], height=8, ascent=8)
+    add_bitmap_glyph(lambda x: x.other_glyphs, '.notdef', missing, [], height=8, ascent=8)
     for provider in provider_list:
         if provider.modified_date is not None:
             modified_date = max(modified_date, provider.modified_date)
@@ -115,12 +128,12 @@ def create_fonts(
             for char, width in provider.spaces.items():
                 if char in seen_chars:
                     continue
-                add_space_glyph(char, max(0, width))
+                add_space_glyph(lambda x: x.chars, char, max(0, width))
         elif isinstance(provider, BitmapProvider):
             for char, bitmap in provider.chars.items():
                 if char in seen_chars:
                     continue
-                add_bitmap_glyph(char, bitmap, [], height=provider.height, ascent=provider.ascent)
+                add_bitmap_glyph(lambda x: x.chars, char, bitmap, [], height=provider.height, ascent=provider.ascent)
         elif isinstance(provider, ImageProvider):
             glyph_width = provider.image.width // len(provider.chars[0])
             glyph_height = provider.image.height // len(provider.chars)
@@ -154,15 +167,16 @@ def create_fonts(
                             colored_layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
                         base_mask = base_mask.resized(resize_box)
                         colored_layers = [(mask.resized(resize_box), color) for mask, color in colored_layers]
-                        add_bitmap_glyph(char, base_mask, colored_layers, height=provider.height, ascent=provider.ascent)
+                        add_bitmap_glyph(lambda x: x.chars, char, base_mask, colored_layers, height=provider.height, ascent=provider.ascent)
                     else:
-                        add_space_glyph(char, 0)
-    return CreatedFontInfo(fonts, font_em, created_date, modified_date)
+                        add_space_glyph(lambda x: x.chars, char, 0)
+    return CreatedFontInfo(fonts, scales, font_em, created_date, modified_date)
 
 def finalize_font(
     full_name: str,
     style: STYLES,
-    font: dict[str, CharInfo],
+    chars: dict[str, GlyphInfo],
+    other_glyphs: dict[str, GlyphInfo],
     font_em: int,
     created_date: datetime.datetime,
     modified_date: datetime.datetime,
@@ -192,5 +206,5 @@ def finalize_font(
         underlineThickness = 1 / 12,
         italicAngle = -14.05598
     )
-    result = make_font(info, positions, font, aglfn)
+    result = make_font(info, positions, chars, other_glyphs, aglfn)
     return result

@@ -15,7 +15,7 @@ class ColoredLayer:
     color: fontTools.ttLib.tables.C_P_A_L_.Color
 
 @dataclasses.dataclass
-class CharInfo:
+class GlyphInfo:
     width: float
     height: float
     base_layer: fontTools.pens.ttGlyphPen.Glyph | None
@@ -46,7 +46,7 @@ class FontInfo:
     created: datetime.datetime
     modified: datetime.datetime
 
-def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, CharInfo], aglfn: dict[str, str]) -> fontTools.fontBuilder.FontBuilder:
+def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, GlyphInfo], other_glyphs: dict[str, GlyphInfo], aglfn: dict[str, str]) -> fontTools.fontBuilder.FontBuilder:
     nameStrings = {
         'copyright': info.copyright,
         'familyName': info.name,
@@ -63,29 +63,30 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Cha
     glyph_paths: dict[str, fontTools.pens.ttGlyphPen.Glyph] = {'.notdef': empty_glyph, '.null': empty_glyph}
     color_palettes: list[fontTools.ttLib.tables.C_P_A_L_.Color] = []
     color_layers: dict[str, list[tuple[str, int]]] = {}
-    for char, data in char_data.items():
-        if char not in ('.notdef', '.null'):
-            glyph_name = aglfn.get(char, f'uni{ord(char):04x}')
-            codepoints[ord(char)] = glyph_name
+    def import_glyph(name: str, info: GlyphInfo):
+        glyph_widths[name] = info.width
+        if info.base_layer is None:
+            glyph_paths[name] = empty_glyph
         else:
-            glyph_name = char
-        glyph_widths[glyph_name] = data.width
-        if data.base_layer is None:
-            glyph_paths[glyph_name] = empty_glyph
-        else:
-           glyph_paths[glyph_name] = data.base_layer
-        for i, layer in enumerate(data.colored_layers):
-            layer_name = f'{glyph_name}.layer{i + 1}'
+           glyph_paths[name] = info.base_layer
+        for i, layer in enumerate(info.colored_layers):
+            layer_name = f'{name}.layer{i + 1}'
             glyph_paths[layer_name] = layer.path
-            glyph_widths[layer_name] = data.width
+            glyph_widths[layer_name] = info.width
             try:
                 color_index = color_palettes.index(layer.color)
             except ValueError:
                 color_index = len(color_palettes)
                 color_palettes.append(layer.color)
-            if glyph_name not in color_layers:
-                color_layers[glyph_name] = []
-            color_layers[glyph_name].append((layer_name, color_index))
+            if name not in color_layers:
+                color_layers[name] = []
+            color_layers[name].append((layer_name, color_index))        
+    for char, data in char_data.items():
+        glyph_name = aglfn.get(char, f'uni{ord(char):04x}')
+        codepoints[ord(char)] = glyph_name
+        import_glyph(glyph_name, data)
+    for name, data in other_glyphs.items():
+        import_glyph(name, data)
     widest = max(x.width for x in char_data.values())
     tallest = max(x.height for x in char_data.values())
     font = fontTools.fontBuilder.FontBuilder(unitsPerEm = info.em, isTTF = True)
