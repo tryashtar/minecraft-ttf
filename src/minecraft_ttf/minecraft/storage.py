@@ -7,6 +7,8 @@ import zipfile
 import requests
 
 
+# Minecraft pulls pack information (and therefore font information) from multiple sources: the jar, your resource pack, and external launcher assets
+# so we need a shared interface to read from any of these places
 class Storage(abc.ABC):
     @abc.abstractmethod
     def get_entries(self, prefix: pathlib.PurePath) -> list[pathlib.PurePath]: pass
@@ -16,6 +18,14 @@ class Storage(abc.ABC):
     def exists(self, entry: pathlib.PurePath) -> bool: pass
     @abc.abstractmethod
     def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime | None: pass
+
+def get_storage(location: pathlib.Path) -> Storage | None:
+    if location.is_dir():
+        return FilesystemStorage(location)
+    if location.is_file():
+        zip = zipfile.ZipFile(location, 'r')
+        return ZipStorage(zip)
+    return None
 
 class FilesystemStorage(Storage):
     def __init__(self, root: pathlib.Path):
@@ -76,45 +86,6 @@ def zip_time(jartime: tuple) -> datetime.datetime:
      y, m, d, h, mm, s = jartime
      return datetime.datetime(y, m, d, h, mm, s, 0, tzinfo=datetime.UTC)
 
-class StackStorage(Storage):
-    def __init__(self, stack: list[Storage]):
-        self.stack = stack
-
-    @typing.override
-    def get_entries(self, prefix: pathlib.PurePath) -> list[pathlib.PurePath]:
-        result: list[pathlib.PurePath] = []
-        for member in self.stack:
-            sub_results = member.get_entries(prefix)
-            result.extend(sub_results)
-        unique = list(dict.fromkeys(result))
-        return unique
-
-    @typing.override
-    def read(self, entry: pathlib.PurePath) -> bytes:
-        for member in self.stack:
-            if member.exists(entry):
-                return member.read(entry)
-        raise ValueError(entry)
-
-    @typing.override
-    def exists(self, entry: pathlib.PurePath) -> bool:
-        return any(x.exists(entry) for x in self.stack)
-
-    @typing.override
-    def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime | None:
-        for member in self.stack:
-            if member.exists(entry):
-                return member.modified_time(entry)
-        raise ValueError(entry)
-
-def get_storage(location: pathlib.Path) -> Storage | None:
-    if location.is_dir():
-        return FilesystemStorage(location)
-    if location.is_file():
-        zip = zipfile.ZipFile(location, 'r')
-        return ZipStorage(zip)
-    return None
-
 AssetEntry = typing.TypedDict('AssetEntry', {
     'hash': str
 })
@@ -158,3 +129,37 @@ class AssetStorage(Storage):
     @typing.override
     def modified_time(self, entry: pathlib.PurePath) -> None:
         return None
+
+# a stack of storages that may overlap
+# the first storage that has a match for an entry is used
+# this does not perform any kind of merging (e.g. appending providers), callers check for this class and do it instead
+class StackStorage(Storage):
+    def __init__(self, stack: list[Storage]):
+        self.stack = stack
+
+    @typing.override
+    def get_entries(self, prefix: pathlib.PurePath) -> list[pathlib.PurePath]:
+        result: list[pathlib.PurePath] = []
+        for member in self.stack:
+            sub_results = member.get_entries(prefix)
+            result.extend(sub_results)
+        unique = list(dict.fromkeys(result))
+        return unique
+
+    @typing.override
+    def read(self, entry: pathlib.PurePath) -> bytes:
+        for member in self.stack:
+            if member.exists(entry):
+                return member.read(entry)
+        raise ValueError(entry)
+
+    @typing.override
+    def exists(self, entry: pathlib.PurePath) -> bool:
+        return any(x.exists(entry) for x in self.stack)
+
+    @typing.override
+    def modified_time(self, entry: pathlib.PurePath) -> datetime.datetime | None:
+        for member in self.stack:
+            if member.exists(entry):
+                return member.modified_time(entry)
+        raise ValueError(entry)

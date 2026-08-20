@@ -1,27 +1,36 @@
 import argparse
-import dataclasses
 import datetime
-import hashlib
-import json
 import math
 import pathlib
 import typing
-import zipfile
 
-import requests
+import PIL.Image
 
+from cache import (
+    get_aglfn,
+    get_manifest,
+    jar_info,
+    version_from_data,
+)
+from minecraft_ttf.bitmap import get_palette_rgba
 from minecraft_ttf.font import GlyphInfo
-from minecraft_ttf.minecraft.font import STYLES, create_fonts, finalize_font, style_info
-from minecraft_ttf.minecraft.providers import get_providers
+from minecraft_ttf.minecraft.font import (
+    STYLE,
+    create_font_family,
+    finalize_font,
+    style_info,
+)
+from minecraft_ttf.minecraft.providers import ImageColorCheck
 from minecraft_ttf.minecraft.storage import (
-    AssetSource,
-    AssetStorage,
     StackStorage,
     Storage,
-    ZipStorage,
     get_storage,
 )
-from minecraft_ttf.minecraft.versions import MinecraftVersion, detect_version
+from minecraft_ttf.minecraft.versions import (
+    VANILLA_FONT_ID,
+    MinecraftVersion,
+    get_providers,
+)
 
 
 def main():
@@ -44,13 +53,20 @@ def main():
     pack_generate.add_argument('identifier', type=str, help='Identifier of the font definition to use, e.g. "minecraft:default"')
     pack_generate.add_argument('name', type=str, help='Display name for the generated TTF font')
     for entry in (vanilla_generate, vanilla_history):
-        entry.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(DEFAULT_IDENTIFIERS), choices=typing.get_args(DEFAULT_IDENTIFIERS), help='Identifiers of the font definitions to generate fonts from')
+        entry.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(VANILLA_FONT_ID), choices=typing.get_args(VANILLA_FONT_ID), help='Identifiers of the font definitions to generate fonts from')
     for entry in (vanilla_generate, vanilla_history, pack_generate):
-        entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLES), choices=typing.get_args(STYLES), help='Styles to generate')
+        entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLE), choices=typing.get_args(STYLE), help='Styles to generate')
+        entry.add_argument('--color', type=str, default='auto', choices=['never', 'always', 'auto'], help='When to include color for characters that come from images (auto = only if any part of the image is not solid white)')
     for entry in (vanilla_generate, vanilla_history, pack_generate):
         entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
     for entry in (vanilla_generate, vanilla_history, pack_generate, pack_list):
         entry.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'), help='Folder for cache files')
+    def color_check(color: str) -> ImageColorCheck:
+        return {
+            'never': lambda _: False,
+            'always': lambda _: True,
+            'auto': image_has_color
+        }[color]
     args = parser.parse_args()
     match args.command:
         case 'vanilla':
@@ -58,176 +74,87 @@ def main():
             styles = set(args.styles)
             match args.action:
                 case 'generate':
-                    main_vanilla_generate(args.version, identifiers, styles, args.output, args.cache)
+                    main_vanilla_generate(args.version, identifiers, color_check(args.color), styles, args.output, args.cache)
                 case 'history':
-                    main_vanilla_history(args.start, args.end, identifiers, styles, args.output, args.cache)
+                    main_vanilla_history((args.start, args.end), identifiers, color_check(args.color), styles, args.output, args.cache)
         case 'pack':
             match args.action:
                 case 'generate':
                     styles = set(args.styles)
-                    main_pack_generate(args.version, args.location, args.identifier, args.name, styles, args.output, args.cache)
+                    main_pack_generate(args.version, args.location, args.identifier, args.name, color_check(args.color), styles, args.output, args.cache)
                 case 'list':
                     main_pack_list(args.version, args.location, args.cache)
 
-DEFAULT_IDENTIFIERS = typing.Literal['minecraft:default', 'minecraft:alt', 'minecraft:illageralt']
-
-# TTF metadata includes a creation date
-# this information isn't in the jar, so we have to provide it ourselves
-def default_font_info(identifier: DEFAULT_IDENTIFIERS) -> tuple[str, datetime.datetime]:
-    cache: dict[DEFAULT_IDENTIFIERS, tuple[str, datetime.datetime]] = {
-        'minecraft:default': ('Default', datetime.datetime.fromisoformat('2009-05-16T16:52:00Z')),
-        'minecraft:alt': ('Enchanting', datetime.datetime.fromisoformat('2011-10-06T00:00:00Z')),
-        'minecraft:illageralt': ('Illager Runes', datetime.datetime.fromisoformat('2021-09-15T16:04:30Z')),
-    }
-    return cache[identifier]
-
-def main_vanilla_generate(version_id: str, identifiers: set[DEFAULT_IDENTIFIERS], styles: set[STYLES], output: pathlib.Path, cache: pathlib.Path):
+def main_vanilla_generate(version_id: str, identifiers: set[VANILLA_FONT_ID], color: ImageColorCheck, styles: set[STYLE], output: pathlib.Path, cache: pathlib.Path):
     info = jar_info(version_id, cache)
     if info is None:
         return
     print(f'Detected font capabilities: {info.version.name}')
     aglfn = get_aglfn(cache)
     print(f'Converting fonts from Minecraft {info.manifest['id']}')
-    with info.jar:
-        jar_storage = ZipStorage(info.jar)
-        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets, cache / 'assets' / info.launcher['assetIndex']['id'])
-        store = StackStorage([jar_storage, asset_storage])
-        for identifier in identifiers:
-            name, date = default_font_info(identifier)
-            vanilla_try_font(name, identifier, info.version, store, date, styles, aglfn, output)
+    store = StackStorage([info.jar_storage, info.asset_storage])
+    for identifier in identifiers:
+        vanilla_try_font(identifier, info.version, store, color, styles, aglfn, output)
     print('Done!')
 
-def font_digest(font: dict[str, GlyphInfo]) -> str:
-    alg = hashlib.sha1()
-    for char, data in font.items():
-        string = f'{char}_{data.width}_{data.height}'
-        alg.update(string.encode('utf-8'))
-        if data.base_layer is not None:
-            alg.update(data.base_layer.coordinates.array.tobytes())
-        for layer in data.colored_layers:
-            alg.update(layer.path.coordinates.array.tobytes())
-            alg.update(str(layer.color).encode('utf-8'))
-    return alg.hexdigest()
+def vanilla_try_font(
+   identifier: VANILLA_FONT_ID,
+   version: MinecraftVersion,
+   store: Storage,
+   color: ImageColorCheck,
+   styles: set[STYLE],
+   aglfn: dict[str, str],
+   out: pathlib.Path
+):
+    provider_list = get_providers(version, store, identifier, color)
+    if provider_list is None:
+        print(f'No providers found for {identifier}')
+        return
+    name, created_date = default_font_info(identifier)
+    print(f'Converting {name}')
+    family = create_font_family(provider_list, version.supports_providers, created_date, styles)
+    print_fontsize_info(family.scales)
+    for style, font in family.fonts.items():
+        full_name = 'Minecraft ' + name
+        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+        ttf_name = full_name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
+        dest = out / f'{ttf_name}.ttf'
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ttf.save(dest)
 
-def main_vanilla_history(start: str | None, end: str | None, identifiers: set[DEFAULT_IDENTIFIERS], styles: set[STYLES], output: pathlib.Path, cache: pathlib.Path):
+def main_vanilla_history(version_range: tuple[str | None, str | None], identifiers: set[VANILLA_FONT_ID], color: ImageColorCheck, styles: set[STYLE], output: pathlib.Path, cache: pathlib.Path):
     manifest = get_manifest(cache)
     aglfn = get_aglfn(cache)
-    seen_hashes: set[str] = set()
+    seen_fonts: set[frozenset[frozenset[tuple[str, GlyphInfo]]]] = set()
+    start, end = version_range
     reached_start = start is None
     for version_data in reversed(manifest['versions']):
         if not reached_start and start is not None and version_data['id'] == start:
             reached_start = True
         if not reached_start:
             continue
-        launcher_data = get_launcher_json(version_data['id'], version_data['url'], cache)
-        jar_path = get_jar(version_data['id'], launcher_data, cache)
-        jar = zipfile.ZipFile(jar_path, 'r')
-        version = detect_version(jar)
-        if version is None:
+        info = version_from_data(version_data, output)
+        if info is None:
             continue
-        with jar:
-            store = ZipStorage(jar)
-            for identifier in identifiers:
-                provider_list = get_providers(store, version, identifier)
-                if provider_list is None:
-                    continue
-                name, date = default_font_info(identifier)
-                fonts = create_fonts(provider_list, version.supports_providers, date, styles)
-                for style, font in fonts.fonts.items():
-                    hash = font_digest(font.chars) + font_digest(font.other_glyphs)
-                    if hash not in seen_hashes:
-                        seen_hashes.add(hash)
-                        print(f'{version_data['id']} ({version.name}): {identifier} ({style}) changed')
-                        full_name = 'Minecraft ' + name
-                        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
-                        dest = output / f'{identifier.split(':')[1]}-{style}-{version_data['id']}.ttf'
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        ttf.save(dest)
+        store = StackStorage([info.jar_storage, info.asset_storage])
+        for identifier in identifiers:
+            provider_list = get_providers(info.version, store, identifier, color)
+            if provider_list is None:
+                continue
+            name, date = default_font_info(identifier)
+            family = create_font_family(provider_list, info.version.supports_providers, date, styles)
+            for style, font in family.fonts.items():
+                entry = frozenset([frozenset(font.chars.items()), frozenset(font.other_glyphs.items())])
+                if entry not in seen_fonts:
+                    seen_fonts.add(entry)
+                    print(f'{version_data['id']} ({info.version.name}): {identifier} ({style}) changed')
+                    full_name = 'Minecraft ' + name
+                    ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+                    dest = output / f'{identifier.split(':')[1]}-{style}-{version_data['id']}.ttf'
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    ttf.save(dest)
         if end is not None and version_data['id'] == end:
             break
-
-def vanilla_try_font(
-   name: str,
-   identifier: str,
-   version: MinecraftVersion,
-   store: Storage,
-   created_date: datetime.datetime,
-   styles: set[STYLES],
-   aglfn: dict[str, str],
-   out: pathlib.Path
-):
-    provider_list = get_providers(store, version, identifier)
-    if provider_list is None:
-        return
-    print(f'Converting {name}')
-    fonts = create_fonts(provider_list, version.supports_providers, created_date, styles)
-    for style, font in fonts.fonts.items():
-        full_name = 'Minecraft ' + name
-        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
-        ttf_name = full_name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
-        dest = out / f'{ttf_name}.ttf'
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        ttf.save(dest)
-
-ManifestLatest = typing.TypedDict('ManifestLatest', {
-    'release': str,
-    'snapshot': str
-})
-
-ManifestVersion = typing.TypedDict('ManifestVersion', {
-    'id': str,
-    'url': str
-})
-
-Manifest = typing.TypedDict('Manifest', {
-    'latest': ManifestLatest,
-    'versions': list[ManifestVersion]
-})
-
-LauncherDownload = typing.TypedDict('LauncherDownload', {
-    'url': str
-})
-
-LauncherDownloads = typing.TypedDict('LauncherDownloads', {
-    'client': LauncherDownload
-})
-
-LauncherAssets = typing.TypedDict('LauncherAssets', {
-    'id': str,
-    'url': str,
-})
-
-LauncherData = typing.TypedDict('LauncherData', {
-    'downloads': LauncherDownloads,
-    'assetIndex': LauncherAssets,
-})
-
-@dataclasses.dataclass
-class JarInformation:
-    jar: zipfile.ZipFile
-    manifest: ManifestVersion
-    launcher: LauncherData
-    assets: AssetSource
-    version: MinecraftVersion
-
-def jar_info(version_id: str, cache: pathlib.Path) -> JarInformation | None:
-    manifest = get_manifest(cache)
-    if version_id == 'latest':
-        version_data = get_version(manifest, manifest['latest']['snapshot'])
-    else:
-        version_data = get_version(manifest, version_id)
-    if version_data is None:
-        print(f'Version {version_id} not found in manifest')
-        return None
-    launcher_data = get_launcher_json(version_data['id'], version_data['url'], cache)
-    assets = get_asset_source(launcher_data, cache)
-    jar_path = get_jar(version_data['id'], launcher_data, cache)
-    zip = zipfile.ZipFile(jar_path, 'r')
-    version = detect_version(zip)
-    if version is None:
-        print('Unable to determine capabilities of jar!')
-        return None
-    return JarInformation(zip, version_data, launcher_data, assets, version)
 
 def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path):
     pack_storage = get_storage(location)
@@ -238,11 +165,8 @@ def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path)
     if info is None:
         return
     print(f'Available font identifiers in resource pack {location.name} on Minecraft {info.manifest['id']}:')
-    with info.jar:
-        jar_storage = ZipStorage(info.jar)
-        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets, cache / 'assets' / info.launcher['assetIndex']['id'])
-        store = StackStorage([jar_storage, asset_storage, pack_storage])
-        identifiers = available_identifiers(info.version, store)
+    store = StackStorage([info.jar_storage, info.asset_storage, pack_storage])
+    identifiers = available_identifiers(info.version, store)
     for identifier in identifiers:
         print(identifier)
 
@@ -263,7 +187,7 @@ def available_identifiers(version: MinecraftVersion, store: Storage) -> list[str
         assert version.entry_map is not None
         return list(version.entry_map.keys())
 
-def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str, name: str, styles: set[STYLES], out: pathlib.Path, cache: pathlib.Path):
+def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str, name: str, color: ImageColorCheck, styles: set[STYLE], out: pathlib.Path, cache: pathlib.Path):
     pack_storage = get_storage(location)
     if pack_storage is None:
         print(f'No resource pack at {location}')
@@ -273,121 +197,74 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
         return
     aglfn = get_aglfn(cache)
     print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {info.manifest['id']}')
-    with info.jar:
-        jar_storage = ZipStorage(info.jar)
-        asset_storage = AssetStorage('https://resources.download.minecraft.net', info.version.asset_mount, info.assets, cache / 'assets' / info.launcher['assetIndex']['id'])
-        store = StackStorage([jar_storage, asset_storage, pack_storage])
-        provider_list = get_providers(store, info.version, identifier)
-        if provider_list is None:
-            print(f'No font with ID {identifier} in jar or resource pack')
-            return
-        created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
-        fonts = create_fonts(provider_list, info.version.supports_providers, created_date, styles)
-        point_sizes: dict[int, list[str]] = {}
-        for (num, denom), chars in fonts.scales.items():
-            top = num * 12
-            gcd = math.gcd(top, denom)
-            point_size = top // gcd
-            if point_size not in point_sizes:
-                point_sizes[point_size] = []
-            point_sizes[point_size].extend(chars)
-        for point, chars in point_sizes.items():
-            if len(chars) <= 30:
-                print(f'{len(chars)} characters in this font ({''.join(chars)}) will look pixel-perfect at font size multiples of {point}')
-            else:
-                print(f'{len(chars)} characters in this font will look pixel-perfect at font size multiples of {point}')
-        lcm = math.lcm(*point_sizes.keys())
-        print(f'All characters in this font will look pixel-perfect at font size multiples of {lcm}')
-        for style, font in fonts.fonts.items():
-            ttf = finalize_font(name, style, font.chars, font.other_glyphs, fonts.font_em, fonts.created_date, fonts.modified_date, aglfn)
-            ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
-            dest = out / f'{ttf_name}.ttf'
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            ttf.save(dest)
+    store = StackStorage([info.jar_storage, info.asset_storage, pack_storage])
+    provider_list = get_providers(info.version, store, identifier, color)
+    if provider_list is None:
+        print(f'No font with ID {identifier} in jar or resource pack')
+        return
+    created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
+    family = create_font_family(provider_list, info.version.supports_providers, created_date, styles)
+    print_fontsize_info(family.scales)
+    for style, font in family.fonts.items():
+        ttf = finalize_font(name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+        ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
+        dest = out / f'{ttf_name}.ttf'
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ttf.save(dest)
 
-def get_launcher_json(version_id: str, meta_url: str, cache: pathlib.Path) -> LauncherData:
-    cached_path = cache / f'minecraft-{version_id}.json'
-    try:
-        with open(cached_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f'Downloading Minecraft launcher data {version_id}')
-        response = requests.get(meta_url)
-        response.raise_for_status()
-        data = response.json()
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-    return data
+def print_fontsize_info(scales: dict[tuple[int, int], list[str]]):
+    point_sizes: dict[int, list[str]] = {}
+    for (num, denom), chars in scales.items():
+        top = num * 12
+        gcd = math.gcd(top, denom)
+        point_size = top // gcd
+        if point_size not in point_sizes:
+            point_sizes[point_size] = []
+        point_sizes[point_size].extend(chars)
+    for point, chars in point_sizes.items():
+        if len(chars) <= 30:
+            print(f'{len(chars)} characters in this font ({''.join(chars)}) will look pixel-perfect at font size multiples of {point}')
+        else:
+            print(f'{len(chars)} characters in this font will look pixel-perfect at font size multiples of {point}')
+    lcm = math.lcm(*point_sizes.keys())
+    print(f'All characters in this font will look pixel-perfect at font size multiples of {lcm}')
 
-def get_asset_source(launcher_data: LauncherData, cache: pathlib.Path) -> AssetSource:
-    cached_path = cache / f'assets-{launcher_data['assetIndex']['id']}.json'
-    try:
-        with open(cached_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print(f'Downloading Minecraft assets {launcher_data['assetIndex']['id']}')
-        response = requests.get(launcher_data['assetIndex']['url'])
-        response.raise_for_status()
-        data = response.json()
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-    return data
+# TTF metadata includes a name and creation date
+# this information isn't in the jar, so we have to provide it ourselves
+def default_font_info(identifier: VANILLA_FONT_ID) -> tuple[str, datetime.datetime]:
+    cache: dict[VANILLA_FONT_ID, tuple[str, datetime.datetime]] = {
+        # release time of 0.0.2a, the first version to have a font, according to the wiki: https://minecraft.wiki/w/Java_Edition_Classic_0.0.2a
+        'minecraft:default': ('Default', datetime.datetime.fromisoformat('2009-05-16T16:52:00Z')),
+        # release time of b1.9-pre3, the first version to include enchanting, according to the wiki: https://minecraft.wiki/w/Java_Edition_Beta_1.9_Prerelease_3
+        'minecraft:alt': ('Enchanting', datetime.datetime.fromisoformat('2011-10-06T14:57:00Z')),
+        # release time of 21w37a, the first version to include this font, according to the manifest: https://piston-meta.mojang.com/v1/packages/7dfcb7bb54ac9e9b927627ef2a70d922543bb8bf/21w37a.json
+        'minecraft:illageralt': ('Illager Runes', datetime.datetime.fromisoformat('2021-09-15T16:04:30Z')),
+    }
+    return cache[identifier]
 
-def get_jar(version_id: str, launcher_data: LauncherData, cache: pathlib.Path) -> pathlib.Path:
-    cached_path = cache / f'minecraft-{version_id}.jar'
-    if not cached_path.exists():
-        print(f'Downloading Minecraft jar {version_id}')
-        client_jar = launcher_data['downloads']['client']['url']
-        response = requests.get(client_jar)
-        response.raise_for_status()
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'wb') as f:
-            f.writelines(response.iter_content(chunk_size=16 * 1024))
-    return cached_path
-
-def get_version(manifest: Manifest, version_id: str) -> ManifestVersion | None:
-    for version in manifest['versions']:
-        if version['id'] == version_id:
-            return version
-    return None
-
-def get_manifest(cache: pathlib.Path) -> Manifest:
-    cached_path = cache / 'manifest.json'
-    try:
-        with open(cached_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print('Downloading version manifest')
-        manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
-        response = requests.get(manifest_url)
-        response.raise_for_status()
-        data = response.json()
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-    return data
-
-# The Adobe Glyph List For New Fonts tells us what names to use for the glyphs that characters are mapped to
-def get_aglfn(cache: pathlib.Path) -> dict[str, str]:
-    cached_path = cache / 'aglfn.txt'
-    if not cached_path.exists():
-        print('Downloading Adobe AGLFN')
-        response = requests.get('https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/refs/heads/master/aglfn.txt')
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'wb') as f:
-            f.writelines(response.iter_content(chunk_size=16 * 1024))
-    aglfn_map = {}
-    with open(cached_path, 'r', encoding='utf-8') as aglfn:
-        for line in aglfn:
-            if line.startswith('#') or line.isspace() or len(line) == 0:
-                continue
-            unihex, name, _uniname = line.split(';')
-            uninum = int(unihex, 16)
-            codepoint = chr(uninum)
-            aglfn_map[codepoint] = name
-    return aglfn_map
+def image_has_color(image: PIL.Image.Image) -> bool:
+    colors = image.getcolors(maxcolors = 3)
+    if colors is None or len(colors) >= 3:
+        return True
+    palette = image.getpalette()
+    transparent_index = image.info.get('transparency')
+    for _count, color in colors:
+        if image.mode == 'P':
+            assert palette is not None
+            assert isinstance(color, int)
+            r, g, b, a = get_palette_rgba(palette, transparent_index, color)
+        elif image.mode == 'RGB':
+            assert isinstance(color, tuple)
+            r, g, b = color
+            a = 255
+        elif image.mode == 'RGBA':
+            assert isinstance(color, tuple)
+            r, g, b, a = color
+        else:
+            raise ValueError(image.mode)
+        if a != 0 and not (r == 255 and g == 255 and b == 255):
+            return True
+    return False
 
 if __name__ == '__main__':
     main()

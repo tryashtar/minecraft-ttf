@@ -5,7 +5,7 @@ import typing
 import fontTools.fontBuilder
 import fontTools.ttLib.tables.C_P_A_L_
 
-from minecraft_ttf.bitmap import Bitmap, bitmap_from_image, bitmaps_from_colors
+from minecraft_ttf.bitmap import Bitmap, bitmaps_from_colors
 from minecraft_ttf.font import (
     ColoredLayer,
     FontInfo,
@@ -21,10 +21,10 @@ from minecraft_ttf.minecraft.providers import (
     SpaceProvider,
 )
 
-STYLES = typing.Literal['regular', 'italic', 'bold', 'bold_italic']
+STYLE = typing.Literal['regular', 'italic', 'bold', 'bold_italic']
 
-def style_info(style: STYLES) -> tuple[str, bool, bool]:
-    cache: dict[STYLES, tuple[str, bool, bool]] = {
+def style_info(style: STYLE) -> tuple[str, bool, bool]:
+    cache: dict[STYLE, tuple[str, bool, bool]] = {
         'regular': ('Regular', False, False),
         'italic': ('Italic', False, True),
         'bold': ('Bold', True, False),
@@ -38,8 +38,8 @@ class FontStyleInfo:
     other_glyphs: dict[str, GlyphInfo]
 
 @dataclasses.dataclass
-class CreatedFontInfo:
-    fonts: dict[STYLES, FontStyleInfo]
+class FontFamilyInfo:
+    fonts: dict[STYLE, FontStyleInfo]
     scales: dict[tuple[int, int], list[str]]
     font_em: int
     created_date: datetime.datetime
@@ -47,22 +47,22 @@ class CreatedFontInfo:
 
 type PICKER = typing.Callable[[FontStyleInfo], dict[str, GlyphInfo]]
 
-def create_fonts(
+def create_font_family(
     provider_list: list[Provider],
     has_missing_glyph: bool,
     created_date: datetime.datetime,
-    styles: set[STYLES],
-) -> CreatedFontInfo:
+    styles: set[STYLE],
+) -> FontFamilyInfo:
     modified_date = created_date
     seen_chars: set[str] = set()
     scales: dict[tuple[int, int], list[str]] = {}
-    fonts: dict[STYLES, FontStyleInfo] = {}
+    fonts: dict[STYLE, FontStyleInfo] = {}
     for style in styles:
         fonts[style] = FontStyleInfo(chars={}, other_glyphs={})
     chatbox_height = 12
     font_em = 1200
     pixel_scale = font_em / chatbox_height
-    def add_space_glyph(picker: PICKER, char: str, width: int):
+    def add_space_glyph(picker: PICKER, char: str, width: float):
         seen_chars.add(char)
         if 'regular' in styles:
             picker(fonts['regular'])[char] = GlyphInfo(width = width * pixel_scale, height = 0, base_layer = None, colored_layers = [])
@@ -135,46 +135,22 @@ def create_fonts(
                     continue
                 add_bitmap_glyph(lambda x: x.chars, char, bitmap, [], height=provider.height, ascent=provider.ascent)
         elif isinstance(provider, ImageProvider):
-            glyph_width = provider.image.width // len(provider.chars[0])
-            glyph_height = provider.image.height // len(provider.chars)
-            for y, row in enumerate(provider.chars):
-                for x, char in enumerate(row):
-                    if char is None:
-                        continue
-                    if char in seen_chars:
-                        continue
-                    if provider.ascent > -16384 and provider.height > 0:
-                        gx1 = x * glyph_width
-                        gy1 = y * glyph_height
-                        gx2 = (x + 1) * glyph_width
-                        gy2 = (y + 1) * glyph_height
-                        dimensions = (gx1, gy1, gx2, gy2)
-                        glyph = provider.image.crop(dimensions)
-                        colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]] = []
-                        base_mask = bitmap_from_image(glyph)
-                        if provider.sizes is not None:
-                            left, right = provider.sizes[char]
-                        else:
-                            left = 0
-                            box = base_mask.content_box()
-                            if box is None:
-                                right = 0
-                            else:
-                                _left, _top, right, _bottom = box
-                        resize_box = (left, 0, right, base_mask.height)
-                        if provider.has_color:
-                            color_planes = bitmaps_from_colors(glyph)
-                            colored_layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
-                        base_mask = base_mask.resized(resize_box)
-                        colored_layers = [(mask.resized(resize_box), color) for mask, color in colored_layers]
-                        add_bitmap_glyph(lambda x: x.chars, char, base_mask, colored_layers, height=provider.height, ascent=provider.ascent)
-                    else:
-                        add_space_glyph(lambda x: x.chars, char, 0)
-    return CreatedFontInfo(fonts, scales, font_em, created_date, modified_date)
+            for char, info in provider.chars.items():
+                if char in seen_chars:
+                    continue
+                if provider.ascent > -16384 and provider.height > 0:
+                    colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]] = []
+                    if provider.has_color:
+                        color_planes = bitmaps_from_colors(info.image)
+                        colored_layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
+                    add_bitmap_glyph(lambda x: x.chars, char, info.bitmap, colored_layers, height=provider.height, ascent=provider.ascent)
+                else:
+                    add_space_glyph(lambda x: x.chars, char, 0)
+    return FontFamilyInfo(fonts, scales, font_em, created_date, modified_date)
 
 def finalize_font(
     full_name: str,
-    style: STYLES,
+    style: STYLE,
     chars: dict[str, GlyphInfo],
     other_glyphs: dict[str, GlyphInfo],
     font_em: int,
