@@ -75,11 +75,11 @@ def version_from_data(version_data: ManifestVersion, cache: pathlib.Path) -> Jar
     if version is None:
         return None
     jar_storage = ZipStorage(zip)
-    asset_storage = AssetStorage('https://resources.download.minecraft.net', version.asset_mount, assets, cache / 'assets' / launcher_data['assetIndex']['id'])
+    asset_storage = AssetStorage('https://resources.download.minecraft.net', version.asset_mount, assets, cache / 'assets/objects')
     return JarInformation(jar_storage, asset_storage, version_data, launcher_data, assets, version)
 
 def get_launcher_json(version_id: str, meta_url: str, cache: pathlib.Path) -> LauncherData:
-    cached_path = cache / f'minecraft-{version_id}.json'
+    cached_path = cache / 'versions' / version_id / f'{version_id}.json'
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -94,7 +94,7 @@ def get_launcher_json(version_id: str, meta_url: str, cache: pathlib.Path) -> La
     return data
 
 def get_asset_source(launcher_data: LauncherData, cache: pathlib.Path) -> AssetSource:
-    cached_path = cache / f'assets-{launcher_data['assetIndex']['id']}.json'
+    cached_path = cache / 'assets' / 'indexes' /  f'{launcher_data['assetIndex']['id']}.json'
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -109,7 +109,7 @@ def get_asset_source(launcher_data: LauncherData, cache: pathlib.Path) -> AssetS
     return data
 
 def get_jar(version_id: str, launcher_data: LauncherData, cache: pathlib.Path) -> pathlib.Path:
-    cached_path = cache / f'minecraft-{version_id}.jar'
+    cached_path = cache / 'versions' / version_id / f'{version_id}.jar'
     if not cached_path.exists():
         print(f'Downloading Minecraft jar {version_id}')
         client_jar = launcher_data['downloads']['client']['url']
@@ -127,7 +127,7 @@ def get_version(manifest: Manifest, version_id: str) -> ManifestVersion | None:
     return None
 
 def get_manifest(cache: pathlib.Path) -> Manifest:
-    cached_path = cache / 'manifest.json'
+    cached_path = cache / 'versions/version_manifest_v2.json'
     try:
         with open(cached_path, 'r', encoding='utf-8') as f:
             data = json.load(f)

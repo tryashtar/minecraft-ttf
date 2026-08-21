@@ -86,6 +86,7 @@ def create_font_family(
         italic_step_size = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
         add_width = 0 if height == 0 else m_height / height
         char_width = (m_width + add_width) * scale
+        bold_width = (m_width + add_width + 1) * scale
         char_height = m_height * scale
         def make_bold_mask(mask: Bitmap):
              bold_mask = Bitmap((m_width + 1, m_height))
@@ -104,7 +105,7 @@ def create_font_family(
                 path = vectorize(mask, scale, step, italic=italic)
                 if path is not None:
                     colored_paths.append(ColoredLayer(path, color))
-            return GlyphInfo(char_width, char_height, base_path, colored_paths)
+            return GlyphInfo(bold_width if bold else char_width, char_height, base_path, colored_paths)
         if 'regular' in styles:
             picker(fonts['regular'])[char] = make_char_info(bold=False, italic=False)
         if 'italic' in styles:

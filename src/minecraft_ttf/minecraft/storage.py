@@ -110,7 +110,7 @@ class AssetStorage(Storage):
     def read(self, entry: pathlib.PurePath) -> bytes:
         modified = entry.relative_to(self.prefix).as_posix()
         hash = self.source['objects'][modified]['hash']
-        cached = self.cache / hash
+        cached = self.cache / hash[:2] / hash
         if cached.exists():
             return cached.read_bytes()
         url = f'{self.server}/{hash[:2]}/{hash}'

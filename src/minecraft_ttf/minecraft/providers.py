@@ -103,12 +103,23 @@ JsonRootProvider = typing.TypedDict('JsonRootProvider', {
     'providers': list[JsonProvider]
 })
 
-type ImageColorCheck = typing.Callable[[PIL.Image.Image], bool]
+@dataclasses.dataclass
+class ProviderOptions:
+    image_color_predicate: typing.Callable[[PIL.Image.Image], bool]
+    all_char_predicate: typing.Callable[[str], bool]
+    unifont_char_predicate: typing.Callable[[str], bool]
+    option_uniform: bool
+    option_jp: bool
 
 # read JSON providers from the game, find their referenced assets, and load them into our providers
-def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime | None, color: ImageColorCheck) -> list[Provider]:
+def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime | None, options: ProviderOptions) -> list[Provider]:
     result: list[Provider] = []
     for provider in providers:
+        if 'filter' in provider:
+            if 'uniform' in provider['filter'] and provider['filter']['uniform'] != options.option_uniform:
+                continue
+            if 'jp' in provider['filter'] and provider['filter']['jp'] != options.option_jp:
+                continue
         match provider['type']:
             case 'bitmap':
                 img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
@@ -116,8 +127,8 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                 full = ImageProvider(
                     height = provider.get('height', 8),
                     ascent = provider['ascent'],
-                    has_color = color(img_data.data),
-                    chars = image_grid(img_data.data, filter_nul(provider['chars']), None),
+                    has_color = options.image_color_predicate(img_data.data),
+                    chars = image_grid(img_data.data, filter_nul(provider['chars']), None, options.all_char_predicate),
                     modified_date = date_max([modified_date, img_data.modified_date])
                 )
                 result.append(full)
@@ -130,14 +141,14 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
             case 'reference':
                 entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
                 font_data = read_font_definition(store, entry)
-                converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]), color)
+                converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]), options)
                 result.extend(converted)
             case 'legacy_unicode':
                 size_entry = identifier_to_entry(provider['sizes'], kind=None, suffix=None)
                 size_date = store.modified_time(size_entry)
                 size_bytes = store.read(size_entry)
                 sheet_entries = [identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None) for sheet_id in range(0xff + 1)]
-                converted = legacy_unicode(store, sheet_entries, size_bytes, date_max([modified_date, size_date]), color)
+                converted = legacy_unicode(store, sheet_entries, size_bytes, date_max([modified_date, size_date]), options)
                 result.extend(converted)
             case 'unihex':
                 hex_entry = identifier_to_entry(provider['hex_file'], kind=None, suffix=None)
@@ -149,13 +160,14 @@ def convert_providers(store: Storage, providers: list[JsonProvider], modified_da
                         if entry.endswith('.hex'):
                             stats = zip.getinfo(entry)
                             dates.append(zip_time(stats.date_time))
-                            hex_list.extend(zip.read(entry).decode('utf-8').split('\n'))
+                            hex_list.extend(zip.read(entry).decode('utf-8').splitlines())
                 chars: dict[str, Bitmap] = {}
                 for entry in hex_list:
                     if len(entry) > 0:
-                        char, bitmap = unihex(entry)                        
-                        left, right = char_size(char, bitmap, provider.get('size_overrides', []))
-                        chars[char] = bitmap.resized((left, 0, right, bitmap.height))
+                        char, bitmap = unihex(entry)
+                        if options.all_char_predicate(char) and options.unifont_char_predicate(char):
+                            left, right = char_size(char, bitmap, provider.get('size_overrides', []))
+                            chars[char] = bitmap.resized((left, 0, right, bitmap.height))
                 full = BitmapProvider(height=8, ascent=7, chars=chars, modified_date=date_max(dates))
                 result.append(full)
     return result
@@ -210,13 +222,13 @@ def date_max(dates: list[datetime.datetime | None]) -> datetime.datetime | None:
                 result = max(result, entry)
     return result
 
-def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict[str, tuple[int, int]] | None) -> dict[str, CharImage]:
+def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict[str, tuple[int, int]] | None, include: typing.Callable[[str], bool]) -> dict[str, CharImage]:
     result: dict[str, CharImage] = {}
     glyph_width = image.width // len(grid[0])
     glyph_height = image.height // len(grid)
     for y, row in enumerate(grid):
         for x, char in enumerate(row):
-            if char is None:
+            if char is None or not include(char):
                 continue
             gx1 = x * glyph_width
             gy1 = y * glyph_height
@@ -236,7 +248,7 @@ def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict
                     _left, _top, right, _bottom = box
             resize_box = (left, 0, right, base_mask.height)
             cropped_mask = base_mask.resized(resize_box)
-            cropped_glyph = image.crop(resize_box)
+            cropped_glyph = glyph.crop(resize_box)
             result[char] = CharImage(cropped_glyph, cropped_mask)
     return result
 
@@ -265,20 +277,20 @@ def unihex(line: str) -> tuple[str, Bitmap]:
     bitmap.bits = bitarray.bitarray(bits)
     return (char, bitmap)
 
-def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, modified_date: datetime.datetime | None, color: ImageColorCheck) -> list[ImageProvider]:
+def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, modified_date: datetime.datetime | None, options: ProviderOptions) -> list[ImageProvider]:
     result: list[ImageProvider] = []
     for sheet_id, sheet_entry in enumerate(sheets):
         if store.exists(sheet_entry):
             char_offset = sheet_id * 256
-            chars = [[chr(x) if size_bytes[x] > 0 and x < 0xffff else None for x in range(char_offset + y * 16, char_offset + y * 16 + 16)] for y in range(16)]
+            chars = [[chr(x) if size_bytes[x] > 0 else None for x in range(char_offset + y * 16, char_offset + y * 16 + 16)] for y in range(16)]
             size_range = size_bytes[char_offset:char_offset + 256]
-            sizes = {chr(char_offset + i): (x >> 4 & 0xf, x & 0xf + 1) for i, x in enumerate(size_range) if x > 0}
+            sizes = {chr(char_offset + i): ((x >> 4) & 0xf, (x & 0xf) + 1) for i, x in enumerate(size_range) if x > 0}
             img_data = read_image(store, sheet_entry)
             full = ImageProvider(
                 height = 8,
                 ascent = 7,
-                has_color = color(img_data.data),
-                chars = image_grid(img_data.data, chars, sizes),
+                has_color = options.image_color_predicate(img_data.data),
+                chars = image_grid(img_data.data, chars, sizes, lambda x: options.all_char_predicate(x) and options.unifont_char_predicate(x)),
                 modified_date = date_max([modified_date, img_data.modified_date])
             )
             result.append(full)

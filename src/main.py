@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import datetime
 import math
 import pathlib
@@ -20,7 +21,7 @@ from minecraft_ttf.minecraft.font import (
     finalize_font,
     style_info,
 )
-from minecraft_ttf.minecraft.providers import ImageColorCheck
+from minecraft_ttf.minecraft.providers import ProviderOptions
 from minecraft_ttf.minecraft.storage import (
     StackStorage,
     Storage,
@@ -57,35 +58,69 @@ def main():
     for entry in (vanilla_generate, vanilla_history, pack_generate):
         entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLE), choices=typing.get_args(STYLE), help='Styles to generate')
         entry.add_argument('--color', type=str, default='auto', choices=['never', 'always', 'auto'], help='When to include color for characters that come from images (auto = only if any part of the image is not solid white)')
-    for entry in (vanilla_generate, vanilla_history, pack_generate):
+        entry.add_argument('--chars', type=str, default='00000-fffff', help='Ranges of characters to include. Example: "0020-007e,0370-03ff"')
+        entry.add_argument('--unifont-chars', type=str, default='', help='Ranges of characters from GNU unifont providers to include. Example: "0000-ffff"')
+        entry.add_argument('--option-uniform', action=argparse.BooleanOptionalAction, help='Act as though the "Force Unicode Font" option was enabled')
+        entry.add_argument('--option-jp', action=argparse.BooleanOptionalAction, help='Act as though the "Japanese Glyph Variants" option was enabled')
         entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
     for entry in (vanilla_generate, vanilla_history, pack_generate, pack_list):
         entry.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'), help='Folder for cache files')
-    def color_check(color: str) -> ImageColorCheck:
-        return {
-            'never': lambda _: False,
-            'always': lambda _: True,
-            'auto': image_has_color
-        }[color]
     args = parser.parse_args()
     match args.command:
         case 'vanilla':
             identifiers = set(args.identifiers)
-            styles = set(args.styles)
             match args.action:
                 case 'generate':
-                    main_vanilla_generate(args.version, identifiers, color_check(args.color), styles, args.output, args.cache)
+                    main_vanilla_generate(args.version, identifiers, generator_options(args), args.cache)
                 case 'history':
-                    main_vanilla_history((args.start, args.end), identifiers, color_check(args.color), styles, args.output, args.cache)
+                    main_vanilla_history((args.start, args.end), identifiers, generator_options(args), args.cache)
         case 'pack':
             match args.action:
                 case 'generate':
-                    styles = set(args.styles)
-                    main_pack_generate(args.version, args.location, args.identifier, args.name, color_check(args.color), styles, args.output, args.cache)
+                    main_pack_generate(args.version, args.location, args.identifier, args.name, generator_options(args), args.cache)
                 case 'list':
                     main_pack_list(args.version, args.location, args.cache)
 
-def main_vanilla_generate(version_id: str, identifiers: set[VANILLA_FONT_ID], color: ImageColorCheck, styles: set[STYLE], output: pathlib.Path, cache: pathlib.Path):
+@dataclasses.dataclass
+class GeneratorOptions:
+    provider: ProviderOptions
+    styles: set[STYLE]
+    output: pathlib.Path
+
+def generator_options(args: argparse.Namespace) -> GeneratorOptions:
+    styles = set(args.styles)
+    color = {
+        'never': lambda _: False,
+        'always': lambda _: True,
+        'auto': image_has_color
+    }[args.color]
+    all_range = char_range(args.chars)
+    unifont_range = char_range(args.unifont_chars)
+    provider = ProviderOptions(
+        image_color_predicate = color,
+        all_char_predicate = lambda x: char_in_range(x, all_range),
+        unifont_char_predicate = lambda x: char_in_range(x, unifont_range),
+        option_uniform = args.option_uniform,
+        option_jp = args.option_jp,
+    )
+    return GeneratorOptions(provider, styles, args.output)
+
+def char_in_range(char: str, range: list[tuple[int, int]]) -> bool:
+    int_char = ord(char)
+    for start, stop in range:
+        if int_char >= start and int_char <= stop:
+            return True
+    return False
+
+def char_range(input: str) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    parts = [] if input == '' else input.split(',')
+    for part in parts:
+        start, stop = part.split('-', maxsplit=1)
+        result.append((int(start, 16), int(stop, 16)))
+    return result
+
+def main_vanilla_generate(version_id: str, identifiers: set[VANILLA_FONT_ID], options: GeneratorOptions, cache: pathlib.Path):
     info = jar_info(version_id, cache)
     if info is None:
         return
@@ -94,67 +129,99 @@ def main_vanilla_generate(version_id: str, identifiers: set[VANILLA_FONT_ID], co
     print(f'Converting fonts from Minecraft {info.manifest['id']}')
     store = StackStorage([info.jar_storage, info.asset_storage])
     for identifier in identifiers:
-        vanilla_try_font(identifier, info.version, store, color, styles, aglfn, output)
+        vanilla_try_font(identifier, info.version, store, options, aglfn)
     print('Done!')
 
 def vanilla_try_font(
-   identifier: VANILLA_FONT_ID,
-   version: MinecraftVersion,
-   store: Storage,
-   color: ImageColorCheck,
-   styles: set[STYLE],
-   aglfn: dict[str, str],
-   out: pathlib.Path
+    identifier: VANILLA_FONT_ID,
+    version: MinecraftVersion,
+    store: Storage,
+    options: GeneratorOptions,
+    aglfn: dict[str, str],
 ):
-    provider_list = get_providers(version, store, identifier, color)
+    provider_list = get_providers(version, store, identifier, options.provider)
     if provider_list is None:
         print(f'No providers found for {identifier}')
         return
     name, created_date = default_font_info(identifier)
     print(f'Converting {name}')
-    family = create_font_family(provider_list, version.supports_providers, created_date, styles)
+    family = create_font_family(provider_list, version.supports_providers, created_date, options.styles)
     print_fontsize_info(family.scales)
     for style, font in family.fonts.items():
         full_name = 'Minecraft ' + name
         ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
         ttf_name = full_name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
-        dest = out / f'{ttf_name}.ttf'
+        dest = options.output / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
         ttf.save(dest)
 
-def main_vanilla_history(version_range: tuple[str | None, str | None], identifiers: set[VANILLA_FONT_ID], color: ImageColorCheck, styles: set[STYLE], output: pathlib.Path, cache: pathlib.Path):
+def main_vanilla_history(version_range: tuple[str | None, str | None], identifiers: set[VANILLA_FONT_ID], options: GeneratorOptions, cache: pathlib.Path):
     manifest = get_manifest(cache)
     aglfn = get_aglfn(cache)
-    seen_fonts: set[frozenset[frozenset[tuple[str, GlyphInfo]]]] = set()
     start, end = version_range
+    unique_chars: dict[VANILLA_FONT_ID, list[dict[str, GlyphInfo]]] = {}
     reached_start = start is None
     for version_data in reversed(manifest['versions']):
         if not reached_start and start is not None and version_data['id'] == start:
             reached_start = True
         if not reached_start:
             continue
-        info = version_from_data(version_data, output)
+        info = version_from_data(version_data, cache)
         if info is None:
             continue
         store = StackStorage([info.jar_storage, info.asset_storage])
         for identifier in identifiers:
-            provider_list = get_providers(info.version, store, identifier, color)
+            provider_list = get_providers(info.version, store, identifier, options.provider)
             if provider_list is None:
                 continue
             name, date = default_font_info(identifier)
-            family = create_font_family(provider_list, info.version.supports_providers, date, styles)
-            for style, font in family.fonts.items():
-                entry = frozenset([frozenset(font.chars.items()), frozenset(font.other_glyphs.items())])
-                if entry not in seen_fonts:
-                    seen_fonts.add(entry)
-                    print(f'{version_data['id']} ({info.version.name}): {identifier} ({style}) changed')
-                    full_name = 'Minecraft ' + name
-                    ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
-                    dest = output / f'{identifier.split(':')[1]}-{style}-{version_data['id']}.ttf'
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    ttf.save(dest)
+            family = create_font_family(provider_list, info.version.supports_providers, date, options.styles)
+            if len(family.fonts) > 0:
+                font = next(iter(family.fonts.values()))
+                if identifier not in unique_chars:
+                    report = GlyphChangeReport(list(font.chars.keys()), [], [])
+                    unique_chars[identifier] = []
+                else:
+                    report = different_glyphs(unique_chars[identifier][-1], font.chars)
+                if len(report.added) > 0 or len(report.removed) > 0 or len(report.changed) > 0:
+                    unique_chars[identifier].append(font.chars)
+                    print(f'{version_data['id']} ({info.version.name}): {identifier} changed')
+                    if len(report.added) > 0:
+                        print(f'\tadded {report_characters(report.added)}')
+                    if len(report.removed) > 0:
+                        print(f'\tremoved {report_characters(report.removed)}')
+                    if len(report.changed) > 0:
+                        print(f'\tchanged {report_characters(report.changed)}')
+                    for style, font in family.fonts.items():
+                        full_name = 'Minecraft ' + name
+                        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+                        dest = options.output / identifier.split(':')[1] / f'{len(unique_chars[identifier]):03d}-{version_data['id']}-{style}.ttf'
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        ttf.save(dest)
         if end is not None and version_data['id'] == end:
             break
+
+def report_characters(chars: list[str]) -> str:
+    if len(chars) > 60:
+        return f'{len(chars)} characters'
+    return f'{len(chars)} characters ({''.join(chars)!r})'
+
+@dataclasses.dataclass
+class GlyphChangeReport:
+    added: list[str]
+    removed: list[str]
+    changed: list[str]
+
+def different_glyphs(old: dict[str, GlyphInfo], new: dict[str, GlyphInfo]) -> GlyphChangeReport:
+    added = [x for x in new if x not in old]
+    removed = [x for x in old if x not in new]
+    changed: list[str] = []
+    for char in [x for x in old if x in new]:
+        old_glyph = old[char]
+        new_glyph = new[char]
+        if old_glyph != new_glyph:
+            changed.append(char)
+    return GlyphChangeReport(added, removed, changed)
 
 def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path):
     pack_storage = get_storage(location)
@@ -187,7 +254,7 @@ def available_identifiers(version: MinecraftVersion, store: Storage) -> list[str
         assert version.entry_map is not None
         return list(version.entry_map.keys())
 
-def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str, name: str, color: ImageColorCheck, styles: set[STYLE], out: pathlib.Path, cache: pathlib.Path):
+def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str, name: str, options: GeneratorOptions, cache: pathlib.Path):
     pack_storage = get_storage(location)
     if pack_storage is None:
         print(f'No resource pack at {location}')
@@ -198,17 +265,17 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
     aglfn = get_aglfn(cache)
     print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {info.manifest['id']}')
     store = StackStorage([info.jar_storage, info.asset_storage, pack_storage])
-    provider_list = get_providers(info.version, store, identifier, color)
+    provider_list = get_providers(info.version, store, identifier, options.provider)
     if provider_list is None:
         print(f'No font with ID {identifier} in jar or resource pack')
         return
     created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
-    family = create_font_family(provider_list, info.version.supports_providers, created_date, styles)
+    family = create_font_family(provider_list, info.version.supports_providers, created_date, options.styles)
     print_fontsize_info(family.scales)
     for style, font in family.fonts.items():
         ttf = finalize_font(name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
         ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
-        dest = out / f'{ttf_name}.ttf'
+        dest = options.output / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
         ttf.save(dest)
 
@@ -222,12 +289,9 @@ def print_fontsize_info(scales: dict[tuple[int, int], list[str]]):
             point_sizes[point_size] = []
         point_sizes[point_size].extend(chars)
     for point, chars in point_sizes.items():
-        if len(chars) <= 30:
-            print(f'{len(chars)} characters in this font ({''.join(chars)}) will look pixel-perfect at font size multiples of {point}')
-        else:
-            print(f'{len(chars)} characters in this font will look pixel-perfect at font size multiples of {point}')
+        print(f'\t{report_characters(chars)} will look pixel-perfect at font size multiples of {point}px')
     lcm = math.lcm(*point_sizes.keys())
-    print(f'All characters in this font will look pixel-perfect at font size multiples of {lcm}')
+    print(f'\tAll characters in this font will look pixel-perfect at font size multiples of {lcm}px')
 
 # TTF metadata includes a name and creation date
 # this information isn't in the jar, so we have to provide it ourselves

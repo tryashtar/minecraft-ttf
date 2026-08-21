@@ -5,9 +5,9 @@ import typing
 import zipfile
 
 from minecraft_ttf.minecraft.providers import (
-    ImageColorCheck,
     ImageProvider,
     Provider,
+    ProviderOptions,
     ReadEntry,
     SpaceProvider,
     convert_providers,
@@ -94,6 +94,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
     if 'font.txt' not in names and 'assets/minecraft/textures/font/ascii.png' in names:
         # this wrongly includes 13w42a (which removed font.txt)
         # but no easy way to distinguish the two versions
+        # it's a shame because 13w42a has unique behavior
         return MinecraftVersion(
             name = '13w42b+',
             asset_mount = pathlib.PurePath('assets'),
@@ -268,58 +269,59 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         )
     return None
 
-def get_providers(version: MinecraftVersion, store: Storage, identifier: str, color: ImageColorCheck) -> list[Provider] | None:
+def get_providers(version: MinecraftVersion, store: Storage, identifier: str, options: ProviderOptions) -> list[Provider] | None:
     providers: list[Provider] = []
     if version.supports_providers:
         entry = identifier_to_entry(identifier, 'font', 'json')
         if not store.exists(entry):
             return None
         font_data = read_font_definition(store, entry)
-        loaded = convert_providers(store, font_data.data, font_data.modified_date, color)
+        loaded = convert_providers(store, font_data.data, font_data.modified_date, options)
         providers.extend(loaded)
     if version.entry_map is not None:
         if identifier not in version.entry_map:
             return None
-        img_entry = version.entry_map[identifier]
-        img_data = read_image(store, img_entry)
-        if version.hardcoded_chars is not None:
-            chars = version.hardcoded_chars
-            date = img_data.modified_date
-        else:
-            assert version.lookup_chars is not None
-            font_data = read_font_txt(store, version.lookup_chars)
-            empty = '\u0000' * 16
-            chars: list[str] = [
-                empty,
-                empty,
-                *font_data.data,
-                empty,
-                empty,
-                empty,
-                empty,
-                empty
-            ]
-            date = date_max([img_data.modified_date, font_data.modified_date])
-        bitmap = ImageProvider(
-            height = 8,
-            ascent = 7,
-            has_color = color(img_data.data),
-            chars = image_grid(img_data.data, filter_nul(chars), None),
-            modified_date = date
-        )
-        providers.append(bitmap)
+        if not (identifier == 'minecraft:default' and options.option_uniform):
+            img_entry = version.entry_map[identifier]
+            img_data = read_image(store, img_entry)
+            if version.hardcoded_chars is not None:
+                chars = version.hardcoded_chars
+                date = img_data.modified_date
+            else:
+                assert version.lookup_chars is not None
+                font_data = read_font_txt(store, version.lookup_chars)
+                empty = '\u0000' * 16
+                chars: list[str] = [
+                    empty,
+                    empty,
+                    *font_data.data,
+                    empty,
+                    empty,
+                    empty,
+                    empty,
+                    empty
+                ]
+                date = date_max([img_data.modified_date, font_data.modified_date])
+            bitmap = ImageProvider(
+                height = 8,
+                ascent = 7,
+                has_color = options.image_color_predicate(img_data.data),
+                chars = image_grid(img_data.data, filter_nul(chars), None, options.all_char_predicate),
+                modified_date = date
+            )
+            providers.append(bitmap)
     if version.hardcoded_spaces is not None:
-        providers.insert(0, SpaceProvider(version.hardcoded_spaces, modified_date=None))
+        providers.insert(0, SpaceProvider({x: y for x, y in version.hardcoded_spaces.items() if options.all_char_predicate(x)}, modified_date=None))
     if version.hardcoded_unifont is not None:
         sheet_template, size_entry = version.hardcoded_unifont
         size_date = store.modified_time(size_entry)
         size_bytes = store.read(size_entry)
         sheet_entries = [pathlib.PurePath(sheet_template.replace('%x', f'{sheet_id:02x}').replace('%X', f'{sheet_id:02X}')) for sheet_id in range(0xff + 1)]
-        converted = legacy_unicode(store, sheet_entries, size_bytes, size_date, color)
+        converted = legacy_unicode(store, sheet_entries, size_bytes, size_date, options)
         providers.extend(converted)
     return providers
 
 def read_font_txt(store: Storage, entry: pathlib.PurePath) -> ReadEntry[list[str]]:
     text = store.read(entry).decode('utf-8')
-    lines: list[str] = [x for x in text.split('\n') if not x.startswith('#')]
+    lines: list[str] = [x for x in text.splitlines() if not x.startswith('#')]
     return ReadEntry(lines, store.modified_time(entry))

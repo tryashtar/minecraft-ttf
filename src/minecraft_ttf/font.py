@@ -14,12 +14,44 @@ class ColoredLayer:
     path: fontTools.pens.ttGlyphPen.Glyph
     color: fontTools.ttLib.tables.C_P_A_L_.Color
 
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, ColoredLayer):
+            return False
+        if not path_eq(self.path, other.path):
+            return False
+        rgba1 = self.color.red, self.color.green, self.color.blue, self.color.alpha
+        rgba2 = other.color.red, other.color.green, other.color.blue, other.color.alpha
+        return rgba1 == rgba2
+
 @dataclasses.dataclass
 class GlyphInfo:
     width: float
     height: float
     base_layer: fontTools.pens.ttGlyphPen.Glyph | None
     colored_layers: list[ColoredLayer]
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, GlyphInfo):
+            return False
+        if self.height != other.height:
+            return False
+        if self.width != other.width:
+            return False
+        if self.base_layer is None and other.base_layer is not None:
+            return False
+        if self.base_layer is not None and other.base_layer is None:
+            return False
+        if self.base_layer is not None and other.base_layer is not None and not path_eq(self.base_layer, other.base_layer):
+            return False
+        if len(self.colored_layers) != len(other.colored_layers):
+            return False
+        for (c1, c2) in zip(self.colored_layers, other.colored_layers):
+            if c1 != c2:
+                return False
+        return True
+
+def path_eq(p1: fontTools.pens.ttGlyphPen.Glyph, p2: fontTools.pens.ttGlyphPen.Glyph) -> bool:
+    return p1.coordinates.array.tobytes() == p2.coordinates.array.tobytes()
 
 @dataclasses.dataclass
 class FontPositions:
@@ -82,7 +114,9 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Gly
                 color_layers[name] = []
             color_layers[name].append((layer_name, color_index))        
     for char, data in char_data.items():
-        glyph_name = aglfn.get(char, f'uni{ord(char):04x}')
+        char_int = ord(char)
+        fallback_name = f'uni{char_int:04X}' if char_int <= 0xffff else f'u{char_int:X}'
+        glyph_name = aglfn.get(char, fallback_name)
         codepoints[ord(char)] = glyph_name
         import_glyph(glyph_name, data)
     for name, data in other_glyphs.items():
