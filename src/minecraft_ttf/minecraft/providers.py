@@ -1,5 +1,6 @@
 import dataclasses
 import datetime
+import enum
 import io
 import json
 import pathlib
@@ -97,11 +98,19 @@ JsonUnihexProvider = typing.TypedDict('JsonUnihexProvider', {
     'filter': typing.NotRequired[FontFilter],
 })
 
-JsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonReferenceProvider | JsonLegacyUnicodeProvider | JsonUnihexProvider
+ResolvedJsonProvider = JsonBitmapProvider | JsonSpaceProvider | JsonLegacyUnicodeProvider | JsonUnihexProvider
+
+JsonProvider = ResolvedJsonProvider | JsonReferenceProvider
 
 JsonRootProvider = typing.TypedDict('JsonRootProvider', {
     'providers': list[JsonProvider]
 })
+
+class ProviderSupport(enum.Enum):
+    NONE = 0
+    ONLY_UNICODE_WHEN_FORCED = 1
+    SWITCH_FONT_WHEN_FORCED = 2
+    FULL = 3
 
 @dataclasses.dataclass
 class ProviderOptions:
@@ -111,71 +120,132 @@ class ProviderOptions:
     option_uniform: bool
     option_jp: bool
 
-# read JSON providers from the game, find their referenced assets, and load them into our providers
-def convert_providers(store: Storage, providers: list[JsonProvider], modified_date: datetime.datetime | None, options: ProviderOptions) -> list[Provider]:
-    result: list[Provider] = []
-    for provider in providers:
-        if 'filter' in provider:
-            if 'uniform' in provider['filter'] and provider['filter']['uniform'] != options.option_uniform:
-                continue
-            if 'jp' in provider['filter'] and provider['filter']['jp'] != options.option_jp:
-                continue
-        match provider['type']:
-            case 'bitmap':
-                img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
-                img_data = read_image(store, img_entry)
-                full = ImageProvider(
-                    height = provider.get('height', 8),
-                    ascent = provider['ascent'],
-                    has_color = options.image_color_predicate(img_data.data),
-                    chars = image_grid(img_data.data, filter_nul(provider['chars']), None, options.all_char_predicate),
-                    modified_date = date_max([modified_date, img_data.modified_date])
-                )
-                result.append(full)
-            case 'space':
-                full = SpaceProvider(
-                    spaces=provider['advances'],
-                    modified_date=modified_date
-                )
-                result.append(full)
-            case 'reference':
-                entry = identifier_to_entry(provider['id'], kind='font', suffix='json')
-                font_data = read_font_definition(store, entry)
-                converted = convert_providers(store, font_data.data, date_max([modified_date, font_data.modified_date]), options)
-                result.extend(converted)
-            case 'legacy_unicode':
-                size_entry = identifier_to_entry(provider['sizes'], kind=None, suffix=None)
-                size_date = store.modified_time(size_entry)
-                size_bytes = store.read(size_entry)
-                sheet_entries = [identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None) for sheet_id in range(0xff + 1)]
-                converted = legacy_unicode(store, sheet_entries, size_bytes, date_max([modified_date, size_date]), options)
-                result.extend(converted)
-            case 'unihex':
-                hex_entry = identifier_to_entry(provider['hex_file'], kind=None, suffix=None)
-                dates = [store.modified_time(hex_entry)]
-                hex_bytes = store.read(hex_entry)
-                hex_list: list[str] = []
-                with zipfile.ZipFile(io.BytesIO(hex_bytes), 'r') as zip:
-                    for entry in zip.namelist():
-                        if entry.endswith('.hex'):
-                            stats = zip.getinfo(entry)
-                            dates.append(zip_time(stats.date_time))
-                            hex_list.extend(zip.read(entry).decode('utf-8').splitlines())
-                chars: dict[str, Bitmap] = {}
-                for entry in hex_list:
-                    if len(entry) > 0:
-                        char, bitmap = unihex(entry)
-                        if options.all_char_predicate(char) and options.unifont_char_predicate(char):
-                            left, right = char_size(char, bitmap, provider.get('size_overrides', []))
-                            chars[char] = bitmap.resized((left, 0, right, bitmap.height))
-                full = BitmapProvider(height=8, ascent=7, chars=chars, modified_date=date_max(dates))
-                result.append(full)
-    return result
-
 @dataclasses.dataclass
 class ReadEntry[T]:
     data: T
     modified_date: datetime.datetime | None
+
+def get_resolved_providers(identifier: str, store: Storage) -> ReadEntry[list[ResolvedJsonProvider]] | None:
+    entry = identifier_to_entry(identifier, 'font', 'json')
+    if not store.exists(entry):
+        return None
+    font_data = read_font_definition(store, entry)
+    dates: list[datetime.datetime | None] = [font_data.modified_date]
+    i = 0
+    while i < len(font_data.data):
+        provider = font_data.data[i]
+        if provider['type'] != 'reference':
+            i += 1
+            continue
+        resolved = resolve_reference(provider['id'], store, provider.get('filter'))
+        dates.append(resolved.modified_date)
+        font_data.data[i:i + 1] = resolved.data
+    result = typing.cast(list[ResolvedJsonProvider], font_data.data)
+    return ReadEntry(result, date_max(dates))
+
+def resolve_reference(identifier: str, store: Storage, filter: FontFilter | None) -> ReadEntry[list[JsonProvider]]:
+    entry = identifier_to_entry(identifier, kind='font', suffix='json')
+    font_data = read_font_definition(store, entry)
+    if filter is None:
+        return font_data
+    result: list[JsonProvider] = []
+    for entry in font_data.data:
+        merged = merge_filters(filter, entry.get('filter', {}))
+        if merged is not None:
+            entry['filter'] = merged
+            result.append(entry)
+    return ReadEntry(result, font_data.modified_date)
+
+def merge_filters(filter1: FontFilter, filter2: FontFilter) -> FontFilter | None:
+    result: dict[str, typing.Any] = {}
+    for k, v in filter2.items():
+        result[k] = v
+    for k, v in filter1.items():
+        if k in result and result[k] != v:
+            return None
+        result[k] = v
+    return typing.cast(FontFilter, result)
+
+def get_filtered_providers(identifier: str, store: Storage, options: ProviderOptions, support: ProviderSupport) -> ReadEntry[list[ResolvedJsonProvider]] | None:
+    if support == ProviderSupport.NONE:
+        return None
+    if support == ProviderSupport.SWITCH_FONT_WHEN_FORCED and identifier == 'minecraft:default':
+        identifier = 'minecraft:uniform'
+    resolved = get_resolved_providers(identifier, store)
+    if resolved is None:
+        return None
+    filtered: list[ResolvedJsonProvider] = []
+    for provider in resolved.data:
+        if support == ProviderSupport.FULL and 'filter' in provider:
+            if 'uniform' in provider['filter'] and provider['filter']['uniform'] != options.option_uniform:
+                continue
+            if 'jp' in provider['filter'] and provider['filter']['jp'] != options.option_jp:
+                continue
+        if support == ProviderSupport.ONLY_UNICODE_WHEN_FORCED and identifier == 'minecraft:default' and provider['type'] != 'legacy_unicode':
+            continue
+        filtered.append(provider)
+    return ReadEntry(filtered, resolved.modified_date)
+
+def load_providers(identifier: str, store: Storage, options: ProviderOptions, support: ProviderSupport) -> list[Provider] | None:
+    filtered = get_filtered_providers(identifier, store, options, support)
+    if filtered is None:
+        return None
+    result: list[Provider] = []
+    for provider in filtered.data:
+        loaded = convert_provider(store, provider, filtered.modified_date, options)
+        result.extend(loaded)
+    return result
+
+# read JSON providers from the game, find their referenced assets, and load them into our providers
+def convert_provider(store: Storage, provider: JsonProvider, modified_date: datetime.datetime | None, options: ProviderOptions) -> list[Provider]:
+    assert provider['type'] != 'reference'
+    result: list[Provider] = []
+    match provider['type']:
+        case 'bitmap':
+            img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
+            img_data = read_image(store, img_entry)
+            full = ImageProvider(
+                height = provider.get('height', 8),
+                ascent = provider['ascent'],
+                has_color = options.image_color_predicate(img_data.data),
+                chars = image_grid(img_data.data, filter_nul(provider['chars']), None, options.all_char_predicate),
+                modified_date = date_max([modified_date, img_data.modified_date])
+            )
+            result.append(full)
+        case 'space':
+            full = SpaceProvider(
+                spaces=provider['advances'],
+                modified_date=modified_date
+            )
+            result.append(full)
+        case 'legacy_unicode':
+            size_entry = identifier_to_entry(provider['sizes'], kind=None, suffix=None)
+            size_date = store.modified_time(size_entry)
+            size_bytes = store.read(size_entry)
+            sheet_entries = [identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None) for sheet_id in range(0xff + 1)]
+            converted = legacy_unicode(store, sheet_entries, size_bytes, date_max([modified_date, size_date]), options)
+            result.extend(converted)
+        case 'unihex':
+            hex_entry = identifier_to_entry(provider['hex_file'], kind=None, suffix=None)
+            dates = [store.modified_time(hex_entry)]
+            hex_bytes = store.read(hex_entry)
+            hex_list: list[str] = []
+            with zipfile.ZipFile(io.BytesIO(hex_bytes), 'r') as zip:
+                for entry in zip.namelist():
+                    if entry.endswith('.hex'):
+                        stats = zip.getinfo(entry)
+                        dates.append(zip_time(stats.date_time))
+                        hex_list.extend(zip.read(entry).decode('utf-8').splitlines())
+            chars: dict[str, Bitmap] = {}
+            for entry in hex_list:
+                if len(entry) > 0:
+                    char, bitmap = unihex(entry)
+                    if options.all_char_predicate(char) and options.unifont_char_predicate(char):
+                        left, right = char_size(char, bitmap, provider.get('size_overrides', []))
+                        chars[char] = bitmap.resized((left, 0, right, bitmap.height))
+            full = BitmapProvider(height=8, ascent=7, chars=chars, modified_date=date_max(dates))
+            result.append(full)
+    return result
 
 def read_image(store: Storage, entry: pathlib.PurePath) -> ReadEntry[PIL.Image.Image]:
     data = store.read(entry)
@@ -271,8 +341,10 @@ def unihex(line: str) -> tuple[str, Bitmap]:
     bits = bytes.fromhex(art)
     if len(art) == 64:
         size = (16, 16)
-    else:
+    elif len(art) == 32:
         size = (8, 16)
+    else:
+        raise ValueError(len(art))
     bitmap = Bitmap(size)
     bitmap.bits = bitarray.bitarray(bits)
     return (char, bitmap)

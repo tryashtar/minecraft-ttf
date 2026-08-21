@@ -8,15 +8,14 @@ from minecraft_ttf.minecraft.providers import (
     ImageProvider,
     Provider,
     ProviderOptions,
+    ProviderSupport,
     ReadEntry,
     SpaceProvider,
-    convert_providers,
     date_max,
     filter_nul,
-    identifier_to_entry,
     image_grid,
     legacy_unicode,
-    read_font_definition,
+    load_providers,
     read_image,
 )
 from minecraft_ttf.minecraft.storage import Storage
@@ -28,7 +27,7 @@ VANILLA_FONT_ID = typing.Literal['minecraft:default', 'minecraft:alt', 'minecraf
 @dataclasses.dataclass
 class MinecraftVersion:
     name: str
-    supports_providers: bool
+    providers: ProviderSupport
     asset_mount: pathlib.PurePath
     hardcoded_chars: list[str] | None
     lookup_chars: pathlib.PurePath | None
@@ -52,11 +51,22 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             rp = version_data['pack_version'].get('resource')
             if rp is None:
                 rp = version_data['pack_version'].get('resource_major')
+    if rp is not None and rp >= 26:
+        return MinecraftVersion(
+            name = '24w06a+',
+            asset_mount = pathlib.PurePath('assets'),
+            providers = ProviderSupport.FULL,
+            hardcoded_chars = None,
+            lookup_chars = None,
+            hardcoded_spaces = None,
+            hardcoded_unifont = None,
+            entry_map = None,
+        )
     if rp is not None and rp >= 9:
         return MinecraftVersion(
             name = '22w11a+',
             asset_mount = pathlib.PurePath('assets'),
-            supports_providers = True,
+            providers = ProviderSupport.SWITCH_FONT_WHEN_FORCED,
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = None,
@@ -65,9 +75,20 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         )
     if rp is not None and rp >= 8 and 'world_version' in version_data and version_data['world_version'] >= 2966:
         return MinecraftVersion(
-            name='22w03a+',
+            name = '22w03a+',
             asset_mount = pathlib.PurePath('assets'),
-            supports_providers = True,
+            providers = ProviderSupport.SWITCH_FONT_WHEN_FORCED,
+            hardcoded_chars = None,
+            lookup_chars = None,
+            hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
+            hardcoded_unifont = None,
+            entry_map = None,
+        )
+    if rp is not None and rp >= 5 and 'world_version' in version_data and version_data['world_version'] >= 2529:
+        return MinecraftVersion(
+            name = '20w17a+',
+            asset_mount = pathlib.PurePath('assets'),
+            providers = ProviderSupport.SWITCH_FONT_WHEN_FORCED,
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
@@ -79,7 +100,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = '1.13-pre7+',
             asset_mount = pathlib.PurePath('assets'),
-            supports_providers = True,
+            providers = ProviderSupport.ONLY_UNICODE_WHEN_FORCED,
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
@@ -98,7 +119,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = '13w42b+',
             asset_mount = pathlib.PurePath('assets'),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = [
                 '\u00c0\u00c1\u00c2\u00c8\u00ca\u00cb\u00cd\u00d3\u00d4\u00d5\u00da\u00df\u00e3\u00f5\u011f\u0130',
                 '\u0131\u0152\u0153\u015e\u015f\u0174\u0175\u017e\u0207\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
@@ -126,7 +147,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = '13w24a+',
             asset_mount = pathlib.PurePath('assets'),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
@@ -140,7 +161,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = '11w49a+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
@@ -151,7 +172,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'b1.9-pre3+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
@@ -165,7 +186,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'b1.1+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
@@ -177,7 +198,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'b1.0+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             # this list of characters makes no sense
             hardcoded_chars = [
                 empty,
@@ -224,7 +245,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'a1.2.2+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = alpha_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
@@ -237,7 +258,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'a1.0.9+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = alpha_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
@@ -249,7 +270,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'c0.0.17a+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = full_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
@@ -260,7 +281,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         return MinecraftVersion(
             name = 'c0.0.11a+',
             asset_mount = pathlib.PurePath(),
-            supports_providers = False,
+            providers = ProviderSupport.NONE,
             hardcoded_chars = full_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
@@ -271,12 +292,10 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
 
 def get_providers(version: MinecraftVersion, store: Storage, identifier: str, options: ProviderOptions) -> list[Provider] | None:
     providers: list[Provider] = []
-    if version.supports_providers:
-        entry = identifier_to_entry(identifier, 'font', 'json')
-        if not store.exists(entry):
-            return None
-        font_data = read_font_definition(store, entry)
-        loaded = convert_providers(store, font_data.data, font_data.modified_date, options)
+    loaded = load_providers(identifier, store, options, version.providers)
+    if loaded is None and version.providers != ProviderSupport.NONE:
+        return None
+    if loaded is not None:
         providers.extend(loaded)
     if version.entry_map is not None:
         if identifier not in version.entry_map:

@@ -17,11 +17,12 @@ from minecraft_ttf.bitmap import get_palette_rgba
 from minecraft_ttf.font import GlyphInfo
 from minecraft_ttf.minecraft.font import (
     STYLE,
+    FontFamilyInfo,
     create_font_family,
     finalize_font,
     style_info,
 )
-from minecraft_ttf.minecraft.providers import ProviderOptions
+from minecraft_ttf.minecraft.providers import ProviderOptions, ProviderSupport
 from minecraft_ttf.minecraft.storage import (
     StackStorage,
     Storage,
@@ -60,8 +61,8 @@ def main():
         entry.add_argument('--color', type=str, default='auto', choices=['never', 'always', 'auto'], help='When to include color for characters that come from images (auto = only if any part of the image is not solid white)')
         entry.add_argument('--chars', type=str, default='00000-fffff', help='Ranges of characters to include. Example: "0020-007e,0370-03ff"')
         entry.add_argument('--unifont-chars', type=str, default='', help='Ranges of characters from GNU unifont providers to include. Example: "0000-ffff"')
-        entry.add_argument('--option-uniform', action=argparse.BooleanOptionalAction, help='Act as though the "Force Unicode Font" option was enabled')
-        entry.add_argument('--option-jp', action=argparse.BooleanOptionalAction, help='Act as though the "Japanese Glyph Variants" option was enabled')
+        entry.add_argument('--option-uniform', default=False, action=argparse.BooleanOptionalAction, help='Act as though the "Force Unicode Font" option was enabled')
+        entry.add_argument('--option-jp', default=False, action=argparse.BooleanOptionalAction, help='Act as though the "Japanese Glyph Variants" option was enabled')
         entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
     for entry in (vanilla_generate, vanilla_history, pack_generate, pack_list):
         entry.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'), help='Folder for cache files')
@@ -145,8 +146,8 @@ def vanilla_try_font(
         return
     name, created_date = default_font_info(identifier)
     print(f'Converting {name}')
-    family = create_font_family(provider_list, version.supports_providers, created_date, options.styles)
-    print_fontsize_info(family.scales)
+    family = create_font_family(provider_list, version.providers != ProviderSupport.NONE, created_date, options.styles)
+    print_family_info(family)
     for style, font in family.fonts.items():
         full_name = 'Minecraft ' + name
         ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
@@ -175,7 +176,7 @@ def main_vanilla_history(version_range: tuple[str | None, str | None], identifie
             if provider_list is None:
                 continue
             name, date = default_font_info(identifier)
-            family = create_font_family(provider_list, info.version.supports_providers, date, options.styles)
+            family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, date, options.styles)
             if len(family.fonts) > 0:
                 font = next(iter(family.fonts.values()))
                 if identifier not in unique_chars:
@@ -238,7 +239,7 @@ def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path)
         print(identifier)
 
 def available_identifiers(version: MinecraftVersion, store: Storage) -> list[str]:
-    if version.supports_providers:
+    if version.providers != ProviderSupport.NONE:
         identifiers: list[str] = []
         assets = store.get_entries(pathlib.PurePath('assets'))
         for asset in assets:
@@ -270,8 +271,8 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
         print(f'No font with ID {identifier} in jar or resource pack')
         return
     created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
-    family = create_font_family(provider_list, info.version.supports_providers, created_date, options.styles)
-    print_fontsize_info(family.scales)
+    family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, created_date, options.styles)
+    print_family_info(family)
     for style, font in family.fonts.items():
         ttf = finalize_font(name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
         ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
@@ -279,9 +280,11 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
         dest.parent.mkdir(parents=True, exist_ok=True)
         ttf.save(dest)
 
-def print_fontsize_info(scales: dict[tuple[int, int], list[str]]):
+def print_family_info(family: FontFamilyInfo):
+    if len(family.colored) > 0:
+        print(f'\t{report_characters(family.colored)} have color')
     point_sizes: dict[int, list[str]] = {}
-    for (num, denom), chars in scales.items():
+    for (num, denom), chars in family.scales.items():
         top = num * 12
         gcd = math.gcd(top, denom)
         point_size = top // gcd
@@ -307,8 +310,8 @@ def default_font_info(identifier: VANILLA_FONT_ID) -> tuple[str, datetime.dateti
     return cache[identifier]
 
 def image_has_color(image: PIL.Image.Image) -> bool:
-    colors = image.getcolors(maxcolors = 3)
-    if colors is None or len(colors) >= 3:
+    colors = image.getcolors(maxcolors = 5)
+    if colors is None or len(colors) >= 5:
         return True
     palette = image.getpalette()
     transparent_index = image.info.get('transparency')

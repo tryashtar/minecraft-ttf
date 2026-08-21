@@ -41,6 +41,7 @@ class FontStyleInfo:
 class FontFamilyInfo:
     fonts: dict[STYLE, FontStyleInfo]
     scales: dict[tuple[int, int], list[str]]
+    colored: list[str]
     font_em: int
     created_date: datetime.datetime
     modified_date: datetime.datetime
@@ -56,6 +57,7 @@ def create_font_family(
     modified_date = created_date
     seen_chars: set[str] = set()
     scales: dict[tuple[int, int], list[str]] = {}
+    colored: list[str] = []
     fonts: dict[STYLE, FontStyleInfo] = {}
     for style in styles:
         fonts[style] = FontStyleInfo(chars={}, other_glyphs={})
@@ -142,12 +144,13 @@ def create_font_family(
                 if provider.ascent > -16384 and provider.height > 0:
                     colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]] = []
                     if provider.has_color:
+                        colored.append(char)
                         color_planes = bitmaps_from_colors(info.image)
                         colored_layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
                     add_bitmap_glyph(lambda x: x.chars, char, info.bitmap, colored_layers, height=provider.height, ascent=provider.ascent)
                 else:
                     add_space_glyph(lambda x: x.chars, char, 0)
-    return FontFamilyInfo(fonts, scales, font_em, created_date, modified_date)
+    return FontFamilyInfo(fonts, scales, colored, font_em, created_date, modified_date)
 
 def finalize_font(
     full_name: str,
