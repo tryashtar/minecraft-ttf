@@ -36,7 +36,7 @@ class ModifiedTimes:
 class CharImage:
     image: PIL.Image.Image
     bitmap: Bitmap
-    advance: float
+    advances: tuple[float, float]
  
 # associate characters with parts of an image
 # used for the modern 'bitmap' provider, as well as any version that uses an image for fonts
@@ -52,7 +52,7 @@ class ImageProvider:
 @dataclasses.dataclass
 class CharBitmap:
     bitmap: Bitmap
-    advance: float
+    advances: tuple[float, float]
 
 # associate characters with a one-bit-per-pixel bitmap
 # used for the modern 'unihex' provider
@@ -138,26 +138,32 @@ class ProviderOptions:
     option_uniform: bool
     option_jp: bool
 
-def load_providers(identifier: str, store: Storage, options: ProviderOptions, support: ProviderSupport, times: ModifiedTimes) -> list[Provider] | None:
+def load_providers(identifier: str, store: Storage, options: ProviderOptions, support: ProviderSupport, uneven_unifont: bool, times: ModifiedTimes) -> list[Provider] | None:
     filtered = get_filtered_providers(identifier, store, options, support)
     if filtered is None:
         return None
     result: list[Provider] = []
     for provider in filtered:
         times.update(provider.modified_date)
-        loaded = convert_provider(store, provider.data, options, times)
+        loaded = convert_provider(store, provider.data, options, uneven_unifont, times)
         result.extend(loaded)
     return result
 
-def normal_advance(bitmap: Bitmap, height: int) -> float:
+def normal_advance(bitmap: Bitmap, height: int) -> tuple[float, float]:
     scale = height / bitmap.height
-    return int(0.5 + bitmap.width * scale) + 1
+    advance = int(0.5 + bitmap.width * scale) + 1
+    return (advance, advance + 1)
 
-def uniform_advance(bitmap: Bitmap) -> float:
-    return (bitmap.width // 2) + 1
+def uneven_uniform_advance(bitmap: Bitmap) -> tuple[float, float]:
+    advance = (bitmap.width // 2) + 1
+    return (advance, advance + 0.5)
+
+def even_uniform_advance(bitmap: Bitmap) -> tuple[float, float]:
+    advance = (bitmap.width / 2) + 1
+    return (advance, advance + 0.5)
 
 # read JSON providers from the game, find their referenced assets, and load them into our providers
-def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOptions, times: ModifiedTimes) -> list[Provider]:
+def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOptions, uneven_unifont: bool, times: ModifiedTimes) -> list[Provider]:
     assert provider['type'] != 'reference'
     match provider['type']:
         case 'bitmap':
@@ -183,7 +189,7 @@ def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOp
             times.update(size_date)
             size_bytes = store.read(size_entry)
             sheet_entries = [identifier_to_entry(provider['template'].replace('%s', f'{sheet_id:02x}'), kind='textures', suffix=None) for sheet_id in range(0xff + 1)]
-            converted = legacy_unicode(store, sheet_entries, size_bytes, options, times)
+            converted = legacy_unicode(store, sheet_entries, size_bytes, options, uneven_unifont, times)
             return [x for x in converted]
         case 'unihex':
             hex_entry = identifier_to_entry(provider['hex_file'], kind=None, suffix=None)
@@ -204,7 +210,8 @@ def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOp
                     if options.all_char_predicate(char) and options.unifont_char_predicate(char):
                         left, right = char_size(char, bitmap, provider.get('size_overrides', []))
                         cropped = bitmap.resized((left, 0, right, bitmap.height))
-                        chars[char] = CharBitmap(cropped, uniform_advance(cropped))
+                        advance = uneven_uniform_advance(cropped) if uneven_unifont else even_uniform_advance(cropped)
+                        chars[char] = CharBitmap(cropped, advance)
             full = BitmapProvider(height=8, ascent=7, chars=chars)
             return [full]
 
@@ -309,7 +316,7 @@ def identifier_to_entry(identifier: str, kind: str | None, suffix: str | None) -
         path += f'.{suffix}'
     return pathlib.PurePath(path)
 
-def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict[str, tuple[int, int]] | None, include: typing.Callable[[str], bool], advance: typing.Callable[[Bitmap], float]) -> dict[str, CharImage]:
+def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict[str, tuple[int, int]] | None, include: typing.Callable[[str], bool], advances: typing.Callable[[Bitmap], tuple[float, float]]) -> dict[str, CharImage]:
     result: dict[str, CharImage] = {}
     glyph_width = image.width // len(grid[0])
     glyph_height = image.height // len(grid)
@@ -336,7 +343,7 @@ def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict
             resize_box = (left, 0, right, base_mask.height)
             cropped_mask = base_mask.resized(resize_box)
             cropped_glyph = glyph.crop(resize_box)
-            result[char] = CharImage(cropped_glyph, cropped_mask, advance=advance(cropped_mask))
+            result[char] = CharImage(cropped_glyph, cropped_mask, advances=advances(cropped_mask))
     return result
 
 def filter_nul(chars: list[str]) -> list[list[str | None]]:
@@ -366,7 +373,7 @@ def unihex(line: str) -> tuple[str, Bitmap]:
     bitmap.bits = bitarray.bitarray(bits)
     return (char, bitmap)
 
-def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, options: ProviderOptions, times: ModifiedTimes) -> list[ImageProvider]:
+def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: bytes, options: ProviderOptions, uneven: bool, times: ModifiedTimes) -> list[ImageProvider]:
     result: list[ImageProvider] = []
     for sheet_id, sheet_entry in enumerate(sheets):
         if store.exists(sheet_entry):
@@ -376,11 +383,12 @@ def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: b
             sizes = {chr(char_offset + i): ((x >> 4) & 0xf, (x & 0xf) + 1) for i, x in enumerate(size_range) if x > 0}
             img_data = read_image(store, sheet_entry)
             times.update(img_data.modified_date)
+            advance = uneven_uniform_advance if uneven else even_uniform_advance
             full = ImageProvider(
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
-                chars = image_grid(img_data.data, chars, sizes, lambda x: options.all_char_predicate(x) and options.unifont_char_predicate(x), uniform_advance),
+                chars = image_grid(img_data.data, chars, sizes, lambda x: options.all_char_predicate(x) and options.unifont_char_predicate(x), advance),
             )
             result.append(full)
     return result

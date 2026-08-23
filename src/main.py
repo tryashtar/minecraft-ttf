@@ -135,7 +135,6 @@ def main_vanilla_generate(version_id: str, identifiers: set[VANILLA_FONT_ID], op
     store = StackStorage([info.jar_storage, info.asset_storage])
     for identifier in identifiers:
         vanilla_try_font(identifier, info.version, store, options, aglfn)
-    print('Done!')
 
 def vanilla_try_font(
     identifier: VANILLA_FONT_ID,

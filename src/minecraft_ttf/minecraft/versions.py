@@ -34,6 +34,7 @@ class MinecraftVersion:
     lookup_chars: pathlib.PurePath | None
     hardcoded_spaces: dict[str, float] | None
     hardcoded_unifont: tuple[str, pathlib.PurePath] | None
+    uneven_unifont: bool
     entry_map: dict[VANILLA_FONT_ID, pathlib.PurePath] | None
 
 def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
@@ -52,6 +53,34 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             rp = version_data['pack_version'].get('resource')
             if rp is None:
                 rp = version_data['pack_version'].get('resource_major')
+    if 'world_version' in version_data:
+        world_version = version_data['world_version']
+    else:
+        world_version = None
+    if rp is not None and rp >= 89:
+        return MinecraftVersion(
+            name = '26.3-snapshot-1+',
+            asset_mount = pathlib.PurePath('assets'),
+            providers = ProviderSupport.FULL,
+            hardcoded_chars = None,
+            lookup_chars = None,
+            hardcoded_spaces = None,
+            hardcoded_unifont = None,
+            uneven_unifont = True,
+            entry_map = None,
+        )
+    if rp is not None and rp >= 88 and world_version is not None and world_version >= 4896:
+        return MinecraftVersion(
+            name = '26.2-pre-3+',
+            asset_mount = pathlib.PurePath('assets'),
+            providers = ProviderSupport.FULL,
+            hardcoded_chars = None,
+            lookup_chars = None,
+            hardcoded_spaces = None,
+            hardcoded_unifont = None,
+            uneven_unifont = False,
+            entry_map = None,
+        )
     if rp is not None and rp >= 26:
         return MinecraftVersion(
             name = '24w06a+',
@@ -61,6 +90,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = None,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = None,
         )
     if rp is not None and rp >= 9:
@@ -72,9 +102,10 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = None,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = None,
         )
-    if rp is not None and rp >= 8 and 'world_version' in version_data and version_data['world_version'] >= 2966:
+    if rp is not None and rp >= 8 and world_version is not None and world_version >= 2966:
         return MinecraftVersion(
             name = '22w03a+',
             asset_mount = pathlib.PurePath('assets'),
@@ -83,9 +114,10 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = None,
         )
-    if rp is not None and rp >= 5 and 'world_version' in version_data and version_data['world_version'] >= 2529:
+    if rp is not None and rp >= 5 and world_version is not None and world_version >= 2529:
         return MinecraftVersion(
             name = '20w17a+',
             asset_mount = pathlib.PurePath('assets'),
@@ -94,6 +126,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = None,
         )
     simple_spaces = {' ': 4.0}
@@ -106,6 +139,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = None,
         )
     asset_map: dict[VANILLA_FONT_ID, pathlib.PurePath] = {
@@ -142,6 +176,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = new_unifont,
+            uneven_unifont = True,
             entry_map = asset_map
         )
     if 'assets/minecraft/textures/font/ascii.png' in names:
@@ -153,6 +188,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = new_unifont,
+            uneven_unifont = True,
             entry_map = asset_map
         )
     old_map: dict[VANILLA_FONT_ID, pathlib.PurePath] = {
@@ -167,6 +203,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = ('font/glyph_%X.png', pathlib.PurePath('font/glyph_sizes.bin')),
+            uneven_unifont = True,
             entry_map = old_map
         )
     if 'font/alternate.png' in names:
@@ -178,6 +215,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = old_map
         )
     simple_map: dict[VANILLA_FONT_ID, pathlib.PurePath] = {
@@ -192,6 +230,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = simple_map
         )
     empty = '\u0000' * 16
@@ -222,6 +261,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = simple_map
         )
     alpha_chars = [
@@ -251,6 +291,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = simple_map
         )
     if 'mob/cow.png' in names:
@@ -264,6 +305,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = {'minecraft:default': pathlib.PurePath('default.png')}
         )
     full_chars = [''.join(chr(x) for x in range(y * 16, (y + 1) * 16)) for y in range(16)]
@@ -276,6 +318,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = {'minecraft:default': pathlib.PurePath('default.png')}
         )
     if 'default.gif' in names:
@@ -287,13 +330,14 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
+            uneven_unifont = True,
             entry_map = {'minecraft:default': pathlib.PurePath('default.gif')}
         )
     return None
 
 def get_providers(version: MinecraftVersion, store: Storage, identifier: str, options: ProviderOptions, times: ModifiedTimes) -> list[Provider] | None:
     providers: list[Provider] = []
-    loaded = load_providers(identifier, store, options, version.providers, times)
+    loaded = load_providers(identifier, store, options, version.providers, version.uneven_unifont, times)
     if loaded is None and version.providers != ProviderSupport.NONE:
         return None
     if loaded is not None:
@@ -337,7 +381,7 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
         times.update(size_date)
         size_bytes = store.read(size_entry)
         sheet_entries = [pathlib.PurePath(sheet_template.replace('%x', f'{sheet_id:02x}').replace('%X', f'{sheet_id:02X}')) for sheet_id in range(0xff + 1)]
-        converted = legacy_unicode(store, sheet_entries, size_bytes, options, times)
+        converted = legacy_unicode(store, sheet_entries, size_bytes, options, version.uneven_unifont, times)
         providers.extend(converted)
     return providers
 
