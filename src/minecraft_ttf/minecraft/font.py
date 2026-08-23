@@ -43,18 +43,14 @@ class FontFamilyInfo:
     scales: dict[tuple[int, int], list[str]]
     colored: list[str]
     font_em: int
-    created_date: datetime.datetime
-    modified_date: datetime.datetime
 
 type PICKER = typing.Callable[[FontStyleInfo], dict[str, GlyphInfo]]
 
 def create_font_family(
     provider_list: list[Provider],
     has_missing_glyph: bool,
-    created_date: datetime.datetime,
     styles: set[STYLE],
 ) -> FontFamilyInfo:
-    modified_date = created_date
     seen_chars: set[str] = set()
     scales: dict[tuple[int, int], list[str]] = {}
     colored: list[str] = []
@@ -125,8 +121,6 @@ def create_font_family(
                     missing.set_at((x, y), True)
     add_bitmap_glyph(lambda x: x.other_glyphs, '.notdef', missing, [], height=8, ascent=8)
     for provider in provider_list:
-        if provider.modified_date is not None:
-            modified_date = max(modified_date, provider.modified_date)
         if isinstance(provider, SpaceProvider):
             for char, width in provider.spaces.items():
                 if char in seen_chars:
@@ -150,7 +144,7 @@ def create_font_family(
                     add_bitmap_glyph(lambda x: x.chars, char, info.bitmap, colored_layers, height=provider.height, ascent=provider.ascent)
                 else:
                     add_space_glyph(lambda x: x.chars, char, 0)
-    return FontFamilyInfo(fonts, scales, colored, font_em, created_date, modified_date)
+    return FontFamilyInfo(fonts, scales, colored, font_em)
 
 def finalize_font(
     full_name: str,

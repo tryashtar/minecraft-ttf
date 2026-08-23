@@ -22,7 +22,11 @@ from minecraft_ttf.minecraft.font import (
     finalize_font,
     style_info,
 )
-from minecraft_ttf.minecraft.providers import ProviderOptions, ProviderSupport
+from minecraft_ttf.minecraft.providers import (
+    ModifiedTimes,
+    ProviderOptions,
+    ProviderSupport,
+)
 from minecraft_ttf.minecraft.storage import (
     StackStorage,
     Storage,
@@ -140,17 +144,19 @@ def vanilla_try_font(
     options: GeneratorOptions,
     aglfn: dict[str, str],
 ):
-    provider_list = get_providers(version, store, identifier, options.provider)
+    times = ModifiedTimes()
+    provider_list = get_providers(version, store, identifier, options.provider, times)
     if provider_list is None:
         print(f'No providers found for {identifier}')
         return
     name, created_date = default_font_info(identifier)
     print(f'Converting {name}')
-    family = create_font_family(provider_list, version.providers != ProviderSupport.NONE, created_date, options.styles)
+    family = create_font_family(provider_list, version.providers != ProviderSupport.NONE, options.styles)
     print_family_info(family)
+    assert times.newest is not None
     for style, font in family.fonts.items():
         full_name = 'Minecraft ' + name
-        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, created_date, times.newest, aglfn)
         ttf_name = full_name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
         dest = options.output / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -172,11 +178,13 @@ def main_vanilla_history(version_range: tuple[str | None, str | None], identifie
             continue
         store = StackStorage([info.jar_storage, info.asset_storage])
         for identifier in identifiers:
-            provider_list = get_providers(info.version, store, identifier, options.provider)
+            times = ModifiedTimes()
+            provider_list = get_providers(info.version, store, identifier, options.provider, times)
             if provider_list is None:
                 continue
-            name, date = default_font_info(identifier)
-            family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, date, options.styles)
+            name, created_date = default_font_info(identifier)
+            assert times.newest is not None
+            family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, options.styles)
             if len(family.fonts) > 0:
                 font = next(iter(family.fonts.values()))
                 if identifier not in unique_chars:
@@ -195,7 +203,7 @@ def main_vanilla_history(version_range: tuple[str | None, str | None], identifie
                         print(f'\tchanged {report_characters(report.changed)}')
                     for style, font in family.fonts.items():
                         full_name = 'Minecraft ' + name
-                        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+                        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, created_date, times.newest, aglfn)
                         dest = options.output / identifier.split(':')[1] / f'{len(unique_chars[identifier]):03d}-{version_data['id']}-{style}.ttf'
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         ttf.save(dest)
@@ -266,15 +274,17 @@ def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str,
     aglfn = get_aglfn(cache)
     print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {info.manifest['id']}')
     store = StackStorage([info.jar_storage, info.asset_storage, pack_storage])
-    provider_list = get_providers(info.version, store, identifier, options.provider)
+    times = ModifiedTimes()
+    provider_list = get_providers(info.version, store, identifier, options.provider, times)
     if provider_list is None:
         print(f'No font with ID {identifier} in jar or resource pack')
         return
-    created_date = min(x.modified_date for x in provider_list if x.modified_date is not None)
-    family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, created_date, options.styles)
+    family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, options.styles)
     print_family_info(family)
+    assert times.oldest is not None
+    assert times.newest is not None
     for style, font in family.fonts.items():
-        ttf = finalize_font(name, style, font.chars, font.other_glyphs, family.font_em, family.created_date, family.modified_date, aglfn)
+        ttf = finalize_font(name, style, font.chars, font.other_glyphs, family.font_em, times.oldest, times.newest, aglfn)
         ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
         dest = options.output / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)

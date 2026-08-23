@@ -6,12 +6,12 @@ import zipfile
 
 from minecraft_ttf.minecraft.providers import (
     ImageProvider,
+    ModifiedTimes,
     Provider,
     ProviderOptions,
     ProviderSupport,
     ReadEntry,
     SpaceProvider,
-    date_max,
     filter_nul,
     image_grid,
     legacy_unicode,
@@ -290,9 +290,9 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
         )
     return None
 
-def get_providers(version: MinecraftVersion, store: Storage, identifier: str, options: ProviderOptions) -> list[Provider] | None:
+def get_providers(version: MinecraftVersion, store: Storage, identifier: str, options: ProviderOptions, times: ModifiedTimes) -> list[Provider] | None:
     providers: list[Provider] = []
-    loaded = load_providers(identifier, store, options, version.providers)
+    loaded = load_providers(identifier, store, options, version.providers, times)
     if loaded is None and version.providers != ProviderSupport.NONE:
         return None
     if loaded is not None:
@@ -303,12 +303,13 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
         if not (identifier == 'minecraft:default' and options.option_uniform):
             img_entry = version.entry_map[identifier]
             img_data = read_image(store, img_entry)
+            times.update(img_data.modified_date)
             if version.hardcoded_chars is not None:
                 chars = version.hardcoded_chars
-                date = img_data.modified_date
             else:
                 assert version.lookup_chars is not None
                 font_data = read_font_txt(store, version.lookup_chars)
+                times.update(font_data.modified_date)
                 empty = '\u0000' * 16
                 chars: list[str] = [
                     empty,
@@ -320,23 +321,22 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
                     empty,
                     empty
                 ]
-                date = date_max([img_data.modified_date, font_data.modified_date])
             bitmap = ImageProvider(
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
                 chars = image_grid(img_data.data, filter_nul(chars), None, options.all_char_predicate),
-                modified_date = date
             )
             providers.append(bitmap)
     if version.hardcoded_spaces is not None:
-        providers.insert(0, SpaceProvider({x: y for x, y in version.hardcoded_spaces.items() if options.all_char_predicate(x)}, modified_date=None))
+        providers.insert(0, SpaceProvider({x: y for x, y in version.hardcoded_spaces.items() if options.all_char_predicate(x)}))
     if version.hardcoded_unifont is not None:
         sheet_template, size_entry = version.hardcoded_unifont
         size_date = store.modified_time(size_entry)
+        times.update(size_date)
         size_bytes = store.read(size_entry)
         sheet_entries = [pathlib.PurePath(sheet_template.replace('%x', f'{sheet_id:02x}').replace('%X', f'{sheet_id:02X}')) for sheet_id in range(0xff + 1)]
-        converted = legacy_unicode(store, sheet_entries, size_bytes, size_date, options)
+        converted = legacy_unicode(store, sheet_entries, size_bytes, options, times)
         providers.extend(converted)
     return providers
 
