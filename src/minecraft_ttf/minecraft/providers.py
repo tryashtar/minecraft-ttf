@@ -32,13 +32,14 @@ class ModifiedTimes:
             if self.oldest is None or time < self.oldest:
                 self.oldest = time
 
-# associate characters with parts of an image
-# used for the modern 'bitmap' provider, as well as any version that uses an image for fonts
 @dataclasses.dataclass
 class CharImage:
     image: PIL.Image.Image
     bitmap: Bitmap
+    advance: float
  
+# associate characters with parts of an image
+# used for the modern 'bitmap' provider, as well as any version that uses an image for fonts
 @dataclasses.dataclass
 class ImageProvider:
     height: int
@@ -47,6 +48,12 @@ class ImageProvider:
     # the portion of the image, already cropped to its final size
     chars: dict[str, CharImage]
 
+
+@dataclasses.dataclass
+class CharBitmap:
+    bitmap: Bitmap
+    advance: float
+
 # associate characters with a one-bit-per-pixel bitmap
 # used for the modern 'unihex' provider
 @dataclasses.dataclass
@@ -54,7 +61,7 @@ class BitmapProvider:
     height: int
     ascent: int
     # the bitmap, already cropped to its final size
-    chars: dict[str, Bitmap]
+    chars: dict[str, CharBitmap]
 
 @dataclasses.dataclass
 class SpaceProvider:
@@ -142,6 +149,13 @@ def load_providers(identifier: str, store: Storage, options: ProviderOptions, su
         result.extend(loaded)
     return result
 
+def normal_advance(bitmap: Bitmap, height: int) -> float:
+    scale = height / bitmap.height
+    return int(0.5 + bitmap.width * scale) + 1
+
+def uniform_advance(bitmap: Bitmap) -> float:
+    return (bitmap.width // 2) + 1
+
 # read JSON providers from the game, find their referenced assets, and load them into our providers
 def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOptions, times: ModifiedTimes) -> list[Provider]:
     assert provider['type'] != 'reference'
@@ -150,11 +164,12 @@ def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOp
             img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)
             img_data = read_image(store, img_entry)
             times.update(img_data.modified_date)
+            height = provider.get('height', 8)
             full = ImageProvider(
-                height = provider.get('height', 8),
+                height = height,
                 ascent = provider['ascent'],
                 has_color = options.image_color_predicate(img_data.data),
-                chars = image_grid(img_data.data, filter_nul(provider['chars']), None, options.all_char_predicate),
+                chars = image_grid(img_data.data, filter_nul(provider['chars']), None, options.all_char_predicate, lambda x: normal_advance(x, height)),
             )
             return [full]
         case 'space':
@@ -182,13 +197,14 @@ def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOp
                         stats = zip.getinfo(entry)
                         times.update(zip_time(stats.date_time))
                         hex_list.extend(zip.read(entry).decode('utf-8').splitlines())
-            chars: dict[str, Bitmap] = {}
+            chars: dict[str, CharBitmap] = {}
             for entry in hex_list:
                 if len(entry) > 0:
                     char, bitmap = unihex(entry)
                     if options.all_char_predicate(char) and options.unifont_char_predicate(char):
                         left, right = char_size(char, bitmap, provider.get('size_overrides', []))
-                        chars[char] = bitmap.resized((left, 0, right, bitmap.height))
+                        cropped = bitmap.resized((left, 0, right, bitmap.height))
+                        chars[char] = CharBitmap(cropped, uniform_advance(cropped))
             full = BitmapProvider(height=8, ascent=7, chars=chars)
             return [full]
 
@@ -293,7 +309,7 @@ def identifier_to_entry(identifier: str, kind: str | None, suffix: str | None) -
         path += f'.{suffix}'
     return pathlib.PurePath(path)
 
-def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict[str, tuple[int, int]] | None, include: typing.Callable[[str], bool]) -> dict[str, CharImage]:
+def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict[str, tuple[int, int]] | None, include: typing.Callable[[str], bool], advance: typing.Callable[[Bitmap], float]) -> dict[str, CharImage]:
     result: dict[str, CharImage] = {}
     glyph_width = image.width // len(grid[0])
     glyph_height = image.height // len(grid)
@@ -320,7 +336,7 @@ def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict
             resize_box = (left, 0, right, base_mask.height)
             cropped_mask = base_mask.resized(resize_box)
             cropped_glyph = glyph.crop(resize_box)
-            result[char] = CharImage(cropped_glyph, cropped_mask)
+            result[char] = CharImage(cropped_glyph, cropped_mask, advance=advance(cropped_mask))
     return result
 
 def filter_nul(chars: list[str]) -> list[list[str | None]]:
@@ -364,7 +380,7 @@ def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: b
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
-                chars = image_grid(img_data.data, chars, sizes, lambda x: options.all_char_predicate(x) and options.unifont_char_predicate(x)),
+                chars = image_grid(img_data.data, chars, sizes, lambda x: options.all_char_predicate(x) and options.unifont_char_predicate(x), uniform_advance),
             )
             result.append(full)
     return result

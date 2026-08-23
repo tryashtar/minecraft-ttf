@@ -16,6 +16,7 @@ from minecraft_ttf.minecraft.providers import (
     image_grid,
     legacy_unicode,
     load_providers,
+    normal_advance,
     read_image,
 )
 from minecraft_ttf.minecraft.storage import Storage
@@ -325,7 +326,7 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
-                chars = image_grid(img_data.data, filter_nul(chars), None, options.all_char_predicate),
+                chars = image_grid(img_data.data, filter_nul(chars), None, options.all_char_predicate, lambda x: normal_advance(x, 8)),
             )
             providers.append(bitmap)
     if version.hardcoded_spaces is not None:

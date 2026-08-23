@@ -320,6 +320,7 @@ def default_font_info(identifier: VANILLA_FONT_ID) -> tuple[str, datetime.dateti
     return cache[identifier]
 
 def image_has_color(image: PIL.Image.Image) -> bool:
+    # sometimes there are multiple fully transparent colors, so look for more than just 2
     colors = image.getcolors(maxcolors = 5)
     if colors is None or len(colors) >= 5:
         return True

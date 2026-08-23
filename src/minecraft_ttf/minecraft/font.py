@@ -70,7 +70,7 @@ def create_font_family(
             picker(fonts['bold'])[char] = GlyphInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
         if 'bold_italic' in styles:
             picker(fonts['bold_italic'])[char] = GlyphInfo(width = (width + 1) * pixel_scale, height = 0, base_layer = None, colored_layers = [])
-    def add_bitmap_glyph(picker: PICKER, char: str, base_layer: Bitmap, colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]], height: int, ascent: int):
+    def add_bitmap_glyph(picker: PICKER, char: str, base_layer: Bitmap, colored_layers: list[tuple[Bitmap, fontTools.ttLib.tables.C_P_A_L_.Color]], advance: float, height: int, ascent: int):
         base_size = base_layer.get_size()
         assert all(mask.get_size() == base_size for mask, _ in colored_layers)
         m_width, m_height = base_size
@@ -82,9 +82,8 @@ def create_font_family(
         scale = height / m_height * pixel_scale
         step_size = (0, 0) if height == 0 else (0, (height - ascent) / height * m_height)
         italic_step_size = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
-        add_width = 0 if height == 0 else m_height / height
-        char_width = (m_width + add_width) * scale
-        bold_width = (m_width + add_width + 1) * scale
+        char_width = advance * pixel_scale
+        bold_width = (advance + 1) * pixel_scale
         char_height = m_height * scale
         def make_bold_mask(mask: Bitmap):
              bold_mask = Bitmap((m_width + 1, m_height))
@@ -119,7 +118,7 @@ def create_font_family(
             for x in range(mw):
                 if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
                     missing.set_at((x, y), True)
-    add_bitmap_glyph(lambda x: x.other_glyphs, '.notdef', missing, [], height=8, ascent=8)
+    add_bitmap_glyph(lambda x: x.other_glyphs, '.notdef', missing, [], advance=6, height=8, ascent=8)
     for provider in provider_list:
         if isinstance(provider, SpaceProvider):
             for char, width in provider.spaces.items():
@@ -127,10 +126,10 @@ def create_font_family(
                     continue
                 add_space_glyph(lambda x: x.chars, char, max(0, width))
         elif isinstance(provider, BitmapProvider):
-            for char, bitmap in provider.chars.items():
+            for char, info in provider.chars.items():
                 if char in seen_chars:
                     continue
-                add_bitmap_glyph(lambda x: x.chars, char, bitmap, [], height=provider.height, ascent=provider.ascent)
+                add_bitmap_glyph(lambda x: x.chars, char, info.bitmap, [], advance=info.advance, height=provider.height, ascent=provider.ascent)
         elif isinstance(provider, ImageProvider):
             for char, info in provider.chars.items():
                 if char in seen_chars:
@@ -141,7 +140,7 @@ def create_font_family(
                         colored.append(char)
                         color_planes = bitmaps_from_colors(info.image)
                         colored_layers.extend([(mask, fontTools.ttLib.tables.C_P_A_L_.Color(r / 255, g /255, b / 255, a / 255)) for mask, (r, g, b, a) in color_planes if a > 10])
-                    add_bitmap_glyph(lambda x: x.chars, char, info.bitmap, colored_layers, height=provider.height, ascent=provider.ascent)
+                    add_bitmap_glyph(lambda x: x.chars, char, info.bitmap, colored_layers, advance=info.advance, height=provider.height, ascent=provider.ascent)
                 else:
                     add_space_glyph(lambda x: x.chars, char, 0)
     return FontFamilyInfo(fonts, scales, colored, font_em)
