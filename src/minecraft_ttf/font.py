@@ -30,6 +30,7 @@ class GlyphInfo:
     height: float
     base_layer: fontTools.pens.ttGlyphPen.Glyph | None
     colored_layers: list[ColoredLayer]
+    offsets: list[tuple[float, float]]
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, GlyphInfo):
@@ -44,12 +45,17 @@ class GlyphInfo:
             return False
         if self.base_layer is not None and other.base_layer is not None and not path_eq(self.base_layer, other.base_layer):
             return False
+        if self.offsets != other.offsets:
+            return False
         if len(self.colored_layers) != len(other.colored_layers):
             return False
         for (c1, c2) in zip(self.colored_layers, other.colored_layers):
             if c1 != c2:
                 return False
         return True
+
+def empty_glyph(width: float) -> GlyphInfo:
+    return GlyphInfo(width, 0, None, [], [(0, 0)])
 
 def path_eq(p1: fontTools.pens.ttGlyphPen.Glyph, p2: fontTools.pens.ttGlyphPen.Glyph) -> bool:
     return p1.coordinates.array.tobytes() == p2.coordinates.array.tobytes()
@@ -97,15 +103,26 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Gly
     color_palettes: list[fontTools.ttLib.tables.C_P_A_L_.Color] = []
     color_layers: dict[str, list[tuple[str, int]]] = {}
     def import_glyph(name: str, info: GlyphInfo):
-        glyph_widths[name] = info.width
-        if info.base_layer is None:
+        if info.offsets == [(0.0, 0.0)]:
+            import_base_glyph(name, info.width, info.base_layer, info.colored_layers)
+            return
+        base_name = f'{name}.base'
+        import_base_glyph(base_name, info.width, info.base_layer, info.colored_layers)
+        pen = fontTools.pens.ttGlyphPen.TTGlyphPen(glyph_paths)
+        for x, y in info.offsets:
+            pen.addComponent(base_name, (1, 0, 0, 1, x, y))
+        glyph_widths[name] = info.width + max(x for x, _ in info.offsets)
+        glyph_paths[name] = pen.glyph()
+    def import_base_glyph(name: str, width: float, base_layer: fontTools.pens.ttGlyphPen.Glyph | None, colored_layers: list[ColoredLayer]):
+        glyph_widths[name] = width
+        if base_layer is None:
             glyph_paths[name] = empty_glyph
         else:
-           glyph_paths[name] = info.base_layer
-        for i, layer in enumerate(info.colored_layers):
+            glyph_paths[name] = base_layer
+        for i, layer in enumerate(colored_layers):
             layer_name = f'{name}.layer{i + 1}'
             glyph_paths[layer_name] = layer.path
-            glyph_widths[layer_name] = info.width
+            glyph_widths[layer_name] = width
             try:
                 color_index = color_palettes.index(layer.color)
             except ValueError:
@@ -113,7 +130,7 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Gly
                 color_palettes.append(layer.color)
             if name not in color_layers:
                 color_layers[name] = []
-            color_layers[name].append((layer_name, color_index))        
+            color_layers[name].append((layer_name, color_index))
     for char, data in char_data.items():
         char_int = ord(char)
         fallback_name = f'uni{char_int:04X}' if char_int <= 0xffff else f'u{char_int:X}'

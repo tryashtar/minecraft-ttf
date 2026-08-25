@@ -5,6 +5,7 @@ import typing
 import zipfile
 
 from minecraft_ttf.minecraft.providers import (
+    CharImage,
     ImageProvider,
     ModifiedTimes,
     Provider,
@@ -350,13 +351,13 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
             img_data = read_image(store, img_entry)
             times.update(img_data.modified_date)
             if version.hardcoded_chars is not None:
-                chars = version.hardcoded_chars
+                char_grid = version.hardcoded_chars
             else:
                 assert version.lookup_chars is not None
                 font_data = read_font_txt(store, version.lookup_chars)
                 times.update(font_data.modified_date)
                 empty = '\u0000' * 16
-                chars: list[str] = [
+                char_grid: list[str] = [
                     empty,
                     empty,
                     *font_data.data,
@@ -366,11 +367,12 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
                     empty,
                     empty
                 ]
+            chars = image_grid(img_data.data, filter_nul(char_grid), None, options.all_char_predicate)
             bitmap = ImageProvider(
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
-                chars = image_grid(img_data.data, filter_nul(chars), None, options.all_char_predicate, lambda x: normal_advance(x, 8)),
+                chars = {x: CharImage(img, bm, normal_advance(bm, 8), 1) for x, (img, bm) in chars.items()},
             )
             providers.append(bitmap)
     if version.hardcoded_spaces is not None:
