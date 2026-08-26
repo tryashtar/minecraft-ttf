@@ -44,7 +44,7 @@ There are four operations that the script can perform. You can use `--help` on a
 |`--styles regular`|Specify one or more font styles to include, from the four options `regular`, `bold`, `italic`, `bold_italic`.|
 |`--color auto`|Specify which characters that come from images should be given color. Vanilla typically does not use colors, except for the potato emoji character (🥔) in [the 24w14potato April Fools update](https://minecraft.wiki/w/Java_Edition_24w14potato). Resource packs may use colors extensively.<ul><li>`always`: All characters will have color matching their image appearance. This makes all vanilla text white.</li><li>`never`: All characters will have color ignored, appearing as normal outlined glyphs.</li><li>`auto`: Images that only use white and transparency will produce normal outlined glyphs. Images that use other colors will produce colored characters.</li><ul>|
 |`--chars 00000-fffff`|Specify ranges of characters to include. Written as a comma-delimited list of hyphen-separated hex code pairs. For example, ASCII plus Greek is `0000-007f,0370-03ff`.|
-|`--unifont-chars 00000-00000`|Specify ranges of characters from GNU Unifont sources to include, in the same format. In older versions, Unifont sources come from various hardcoded images. In modern versions, they come from the `unihex` font provider. Including them all is not possible, since there are more glyphs than a TTF font can include.|
+|`--unifont-chars`|Specify ranges of characters from GNU Unifont sources to include, in the same format. In older versions, Unifont sources come from various hardcoded images. In modern versions, they come from the `unihex` font provider. Including them all is not possible, since there are more glyphs than a TTF font can include.|
 |`--option-uniform`|Enabling this will generate the font as if you had the "Force Unicode Font" option in Font Settings enabled. Make sure to use `--unifont-chars` as well, to specify the characters you want. In older versions, this was hardcoded behavior. In modern versions, this corresponds to the `uniform` font provider filter.|
 |`--option-jp`|Enabling this will generate the font as if you had the "Japanese Glyph Variants" option in Font Settings enabled. This corresponds to the `jp` font provider filter.|
 |`--output ./out`|Folder path where generated fonts are placed.|
@@ -60,7 +60,7 @@ I've included separate downloads for copies of the default font with and without
 
 These fonts are very accurate, and should look good at any scale in programs that use vector graphics to draw text. When rasterizing text, the font will be pixel-perfect accurate when its height is set to a multiple of 12 pixels, and the line and letter spacing are whole integers. Just like in Minecraft, characters may show seams or appear distorted when not scaled perfectly, especially bold and colored characters.
 
-In HTML/CSS, one character pixel is 1/12th the font size, so `0.08333em`. You can recreate Minecraft's text shadow effect easily:
+In HTML/CSS, one character pixel is 1/12th the font size, so `0.08333em`. You can recreate Minecraft's text shadow effect easily, for normal characters. Unifont characters use half a pixel instead, so the same style won't work for both kinds of characters.
 
 ```css
 p {
@@ -77,7 +77,7 @@ p {
 
 When running the script to generate fonts, the minimum pixel-perfect font sizes will be printed for you.
 
-These TTFs can be imported back into Minecraft with a `ttf` provider, and perfectly match the vanilla fonts. The `size` property should be set to 12 instead of the default 11. Italic text will be antialiased; you can increase `oversample` to around 4 to make it a closer match:
+These TTFs can be imported back into Minecraft with a `ttf` provider, and perfectly match the vanilla fonts. The `size` property should be set to 12 instead of the default 11. Small characters (such as Unifont characters) and characters in the italic font will be blurry; you can set `oversample` to `2` or `4` to get higher resolution.
 
 `assets/custom_font/font/default.json`:  
 ```json
@@ -87,12 +87,6 @@ These TTFs can be imported back into Minecraft with a `ttf` provider, and perfec
          "type": "ttf",
          "file": "custom_font:default.ttf",
          "size": 12
-      },
-      {
-         "type": "ttf",
-         "file": "custom_font:italic.ttf",
-         "size": 12,
-         "oversample": 4
       }
    ]
 }

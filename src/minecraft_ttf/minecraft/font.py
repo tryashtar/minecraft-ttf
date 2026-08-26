@@ -107,15 +107,17 @@ def create_font_family(
                 path = vectorize(walk, pen)
                 if path is not None:
                     colored_paths.append(ColoredLayer(path, color))
-            offsets = [(0.0, 0.0)]
+            base_offsets = [(0.0, 0.0)]
+            color_offsets = [(0.0, 0.0)]
             char_advance = char_width
             if bold:
                 if bold_walks is not None:
                     char_advance = char_width + (bold_offset * pixel_scale)
                     base_path = vectorize(bold_walks, pen)
                 else:
-                    offsets.append((bold_offset * pixel_scale, 0.0))
-            return GlyphInfo(char_advance, char_height, base_path, colored_paths, offsets)
+                    base_offsets.append((bold_offset * pixel_scale, 0.0))
+                color_offsets.append((bold_offset * pixel_scale, 0.0))
+            return GlyphInfo(char_advance, char_height, base_path, colored_paths, base_offsets, color_offsets)
         if 'regular' in styles:
             picker(fonts['regular'])[char] = make_char_info(bold=False, italic=False)
         if 'italic' in styles:

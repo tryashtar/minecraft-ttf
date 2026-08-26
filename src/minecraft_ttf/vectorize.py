@@ -17,12 +17,12 @@ def to_graph(mask: Bitmap) -> networkx.DiGraph:
                 bottom_right = (x + 1, y + 1)
                 if not is_set(mask, (x, y - 1)):
                     graph.add_edge(top_left, top_right)
-                if not is_set(mask, (x - 1, y)):
-                    graph.add_edge(bottom_left, top_left)
                 if not is_set(mask, (x + 1, y)):
                     graph.add_edge(top_right, bottom_right)
                 if not is_set(mask, (x, y + 1)):
                     graph.add_edge(bottom_right, bottom_left)
+                if not is_set(mask, (x - 1, y)):
+                    graph.add_edge(bottom_left, top_left)
     return graph
 
 def is_set(mask: Bitmap, point: tuple[int, int]) -> bool:
