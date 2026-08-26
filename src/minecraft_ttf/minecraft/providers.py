@@ -349,7 +349,9 @@ def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict
     return result
 
 def filter_nul(chars: list[str]) -> list[list[str | None]]:
-    return [[None if y == '\u0000' else y for y in x] for x in chars]
+    encoded = [x.encode('utf-16', 'surrogatepass').decode('utf-16') for x in chars]
+    assert all(len(x) == len(encoded[0]) for x in encoded)
+    return [[None if y == '\u0000' else y for y in x] for x in encoded]
 
 def char_size(char: str, bitmap: Bitmap, overrides: list[UnihexSizeOverride]) -> tuple[int, int]:
     for entry in overrides:
