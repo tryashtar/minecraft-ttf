@@ -80,7 +80,7 @@ I've included separate downloads for copies of the default font with and without
 
 ## Display Tips
 
-These fonts are very accurate, and should look good at any scale in programs that use vector graphics to draw text. When rasterizing text, the font will be pixel-perfect accurate when its height is set to a multiple of 12 pixels, and the line and letter spacing are whole integers. Colored characters, especially complex ones, will look quite bad when not scaled perfectly.
+These fonts are very accurate, and should look good at any scale in programs that use vector graphics to draw text. When rasterizing text, the font will be pixel-perfect accurate when its height is set to a multiple of 12 pixels, and the line and letter spacing are whole integers. Just like in Minecraft, characters may show seams or appear distorted when not scaled perfectly, especially bold and colored characters.
 
 In HTML/CSS, one character pixel is 1/12th the font size, so `0.08333em`. You can recreate Minecraft's text shadow effect easily:
 

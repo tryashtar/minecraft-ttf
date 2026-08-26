@@ -1,13 +1,10 @@
 import dataclasses
 import datetime
-import enum
 
 import fontTools.fontBuilder
 import fontTools.pens.ttGlyphPen
 import fontTools.ttLib.tables._g_l_y_f
 import fontTools.ttLib.tables.C_P_A_L_
-
-from minecraft_ttf.bitmap import Bitmap, BitmapLabels
 
 
 @dataclasses.dataclass
@@ -104,21 +101,24 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Gly
     color_layers: dict[str, list[tuple[str, int]]] = {}
     def import_glyph(name: str, info: GlyphInfo):
         if info.offsets == [(0.0, 0.0)]:
-            import_base_glyph(name, info.width, info.base_layer, info.colored_layers)
+            import_base_glyph(name, info.width, info.base_layer)
+            import_colored_layers(name, info.width, info.colored_layers)
             return
         base_name = f'{name}.base'
-        import_base_glyph(base_name, info.width, info.base_layer, info.colored_layers)
+        import_base_glyph(base_name, info.width, info.base_layer)
         pen = fontTools.pens.ttGlyphPen.TTGlyphPen(glyph_paths)
         for x, y in info.offsets:
             pen.addComponent(base_name, (1, 0, 0, 1, x, y))
-        glyph_widths[name] = info.width + max(x for x, _ in info.offsets)
         glyph_paths[name] = pen.glyph()
-    def import_base_glyph(name: str, width: float, base_layer: fontTools.pens.ttGlyphPen.Glyph | None, colored_layers: list[ColoredLayer]):
+        further_width = info.width + max(x for x, _ in info.offsets)
+        glyph_widths[name] = further_width
+    def import_base_glyph(name: str, width: float, base_layer: fontTools.pens.ttGlyphPen.Glyph | None):
         glyph_widths[name] = width
         if base_layer is None:
             glyph_paths[name] = empty_glyph
         else:
             glyph_paths[name] = base_layer
+    def import_colored_layers(name: str, width: float, colored_layers: list[ColoredLayer]):
         for i, layer in enumerate(colored_layers):
             layer_name = f'{name}.layer{i + 1}'
             glyph_paths[layer_name] = layer.path
@@ -201,199 +201,3 @@ def make_font(info: FontInfo, positions: FontPositions, char_data: dict[str, Gly
         macStyle = mac_style
     )
     return font
-
-def start_point(mask: Bitmap) -> tuple[int, int]:
-    w, h = mask.get_size()
-    for y in range(h):
-        for x in range(w):
-            if mask.get_at((x, y)):
-                return (x, y)
-    raise ValueError(mask)
-
-def is_set(mask: Bitmap, point: tuple[int, int]) -> bool:
-    x, y = point
-    if x < 0 or y < 0:
-        return False
-    w, h = mask.get_size()
-    if x >= w or y >= h:
-        return False
-    return mask.get_at(point)
-
-class OutlineDirection(enum.Enum):
-    RIGHT = 0
-    UP = 1
-    LEFT = 2
-    DOWN = 3
-
-    def add(self, point: tuple[int, int]) -> tuple[int, int]:
-        x, y = point
-        match self:
-            case OutlineDirection.RIGHT:
-                return (x + 1, y)
-            case OutlineDirection.UP:
-                return (x, y - 1)
-            case OutlineDirection.LEFT:
-                return (x - 1, y)
-            case OutlineDirection.DOWN:
-                return (x, y + 1)
-
-# trace the outline of a connected mask
-# returns a list of all corner points that were visited, in order
-def outline(mask: Bitmap) -> list[tuple[int, int]]:
-    start = start_point(mask)
-    facing = OutlineDirection.RIGHT
-    pos = start
-    result = [pos]
-    while True:
-        x, y = pos
-        top_left = is_set(mask, (x - 1, y - 1))
-        top_right = is_set(mask, (x, y - 1))
-        bottom_left = is_set(mask, (x - 1, y))
-        bottom_right = is_set(mask, (x, y))
-        facing = outline_turn((top_left, top_right, bottom_left, bottom_right), facing)
-        pos = facing.add(pos)
-        result.append(pos)
-        if pos == start:
-            break
-    return result
-
-def outline_turn(corners: tuple[bool, bool, bool, bool], facing: OutlineDirection) -> OutlineDirection:
-    top_left, top_right, bottom_left, bottom_right = corners
-    if top_left and bottom_right and not top_right and not bottom_left:
-        if facing == OutlineDirection.UP:
-            return OutlineDirection.LEFT
-        return OutlineDirection.RIGHT
-    if top_right and bottom_left and not top_left and not bottom_right:
-        if facing == OutlineDirection.RIGHT:
-            return OutlineDirection.UP
-        return OutlineDirection.DOWN
-    if top_left and not bottom_left:
-        return OutlineDirection.LEFT
-    if top_right and not top_left:
-        return OutlineDirection.UP
-    if bottom_right and not top_right:
-        return OutlineDirection.RIGHT
-    if bottom_left and not bottom_right:
-        return OutlineDirection.DOWN
-    raise ValueError(corners)
-
-def neighbor_connected(mask: Bitmap) -> list[Bitmap]:
-    w, h = mask.get_size()
-    pixels_checked: set[tuple[int, int]] = set()
-    result = []
-    for y in range(h):
-        for x in range(w):
-            pos = (x, y)
-            if pos in pixels_checked:
-                continue
-            if not mask.get_at(pos):
-                pixels_checked.add(pos)
-                continue
-            region = Bitmap((w, h))
-            pixel_queue: list[tuple[int, int]] = [pos]
-            while len(pixel_queue) > 0:
-                pixel = pixel_queue.pop()
-                px, py = pixel
-                if pixel in pixels_checked:
-                    continue
-                if not is_set(mask, pixel):
-                    pixels_checked.add(pixel)
-                    continue
-                pixels_checked.add(pixel)
-                region.set_at(pixel, True)
-                pixel_queue.append((px - 1, py))
-                pixel_queue.append((px + 1, py))
-                pixel_queue.append((px, py - 1))
-                pixel_queue.append((px, py + 1))
-            result.append(region)
-            pixels_checked.add(pos)
-    return result
-
-def separate_regions(mask: Bitmap, labels: BitmapLabels) -> tuple[list[Bitmap], list[Bitmap]]:
-    filled = labels.connected_components()
-    w, h = mask.get_size()
-    inverted = Bitmap((w + 2, h + 2))
-    inverted.draw(mask, (1, 1))
-    inverted.invert()
-    big_unfilled = neighbor_connected(inverted)
-    unfilled = []
-    for big in big_unfilled[1:]:
-        fixed = Bitmap((w, h))
-        fixed.draw(big, (-1, -1))
-        unfilled.append(fixed)
-    return (filled, unfilled)
-
-def collinear(p1: tuple[int, int], p2: tuple[int, int], p3: tuple[int, int]) -> bool:
-    x1, y1 = p2[0] - p1[0], p2[1] - p1[1]
-    x2, y2 = p3[0] - p1[0], p3[1] - p1[1]
-    return abs(x1 * y2 - x2 * y1) == 0
-
-class TrackingPen:
-    pen: fontTools.pens.ttGlyphPen.TTGlyphPen
-    height: int
-    scale: float
-    italic: bool
-    step_size: tuple[float, float]
-    current: tuple[int, int]
-    next: tuple[int, int] | None
-
-    def __init__(self, height: int, scale: float, italic: bool, step_size: tuple[float, float]):
-        self.pen = fontTools.pens.ttGlyphPen.TTGlyphPen(None)
-        self.height = height
-        self.scale = scale
-        self.italic = italic
-        self.step_size = step_size
-        self.current = (0, 0)
-        self.next = None
-
-    def convert_point(self, point: tuple[int, int]) -> tuple[float, float]:
-        ox, oy = self.step_size
-        x, y = point
-        x += ox
-        y += oy
-        if self.italic:
-            x += (self.height - y) / 4
-        result = (x * self.scale, (self.height - y) * self.scale)
-        return result
-
-    def draw_last(self):
-        if self.next is not None:
-            converted = self.convert_point(self.next)
-            self.pen.lineTo(converted)
-            self.current = self.next
-            self.next = None
-
-    def move(self, point: tuple[int, int]):
-        self.draw_last()
-        converted = self.convert_point(point)
-        self.pen.moveTo(converted)
-        self.current = point
-        self.next = None
-
-    def line(self, point: tuple[int, int]):
-        if self.next is not None and not collinear(self.current, self.next, point):
-            self.draw_last()
-        self.next = point
-
-def vectorize(mask: Bitmap, scale: float, step_size: tuple[float, float], italic: bool=False) -> fontTools.ttLib.tables._g_l_y_f.Glyph | None:
-    labels = mask.label()
-    filled, empty = separate_regions(mask, labels)
-    if len(filled) == 0:
-        return None
-    height = mask.height
-    pen = TrackingPen(height, scale, italic, step_size)
-    for region in filled:
-        outline_points = outline(region)
-        pen.move(outline_points[0])
-        for point in outline_points[1:]:
-            pen.line(point)
-        pen.next = None
-        pen.pen.closePath()
-    for region in empty:
-        outline_points = list(reversed(outline(region)))
-        pen.move(outline_points[0])
-        for point in outline_points[1:]:
-            pen.line(point)
-        pen.next = None
-        pen.pen.closePath()
-    return pen.pen.glyph()

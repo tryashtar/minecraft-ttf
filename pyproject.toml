@@ -7,6 +7,7 @@ dependencies = [
     "bitarray>=3.10.0",
     "fonttools>=4.63.0",
     "json5>=0.15.0",
+    "networkx>=3.6.1",
     "pillow>=12.3.0",
     "requests>=2.32.3",
 ]

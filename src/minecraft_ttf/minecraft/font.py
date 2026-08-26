@@ -14,7 +14,6 @@ from minecraft_ttf.font import (
     GlyphInfo,
     empty_glyph,
     make_font,
-    vectorize,
 )
 from minecraft_ttf.minecraft.providers import (
     BitmapProvider,
@@ -22,6 +21,7 @@ from minecraft_ttf.minecraft.providers import (
     Provider,
     SpaceProvider,
 )
+from minecraft_ttf.vectorize import vectorize
 
 STYLE = typing.Literal['regular', 'italic', 'bold', 'bold_italic']
 
