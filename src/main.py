@@ -1,6 +1,5 @@
 import argparse
 import dataclasses
-import datetime
 import math
 import pathlib
 import typing
@@ -35,6 +34,7 @@ from minecraft_ttf.minecraft.storage import (
 from minecraft_ttf.minecraft.versions import (
     VANILLA_FONT_ID,
     MinecraftVersion,
+    default_font_info,
     get_providers,
 )
 
@@ -59,9 +59,9 @@ def main():
     pack_generate.add_argument('identifier', type=str, help='Identifier of the font definition to use, e.g. "minecraft:default"')
     pack_generate.add_argument('name', type=str, help='Display name for the generated TTF font')
     for entry in (vanilla_generate, vanilla_history):
-        entry.add_argument('--identifiers', type=str, nargs='*', default=typing.get_args(VANILLA_FONT_ID), choices=typing.get_args(VANILLA_FONT_ID), help='Identifiers of the font definitions to generate fonts from')
+        entry.add_argument('--identifiers', type=str, nargs='*', default=['minecraft:default'], choices=typing.get_args(VANILLA_FONT_ID), help='Identifiers of the font definitions to generate fonts from')
     for entry in (vanilla_generate, vanilla_history, pack_generate):
-        entry.add_argument('--styles', type=str, nargs='*', default=typing.get_args(STYLE), choices=typing.get_args(STYLE), help='Styles to generate')
+        entry.add_argument('--styles', type=str, nargs='*', default=['regular'], choices=typing.get_args(STYLE), help='Styles to generate')
         entry.add_argument('--color', type=str, default='auto', choices=['never', 'always', 'auto'], help='When to include color for characters that come from images (auto = only if any part of the image is not solid white)')
         entry.add_argument('--chars', type=str, default='00000-fffff', help='Ranges of characters to include. Example: "0020-007e,0370-03ff"')
         entry.add_argument('--unifont-chars', type=str, default='', help='Ranges of characters from GNU unifont providers to include. Example: "0000-ffff"')
@@ -304,19 +304,6 @@ def print_family_info(family: FontFamilyInfo):
         print(f'\t{report_characters(chars)} will look pixel-perfect at font size multiples of {point}px')
     lcm = math.lcm(*point_sizes.keys())
     print(f'\tAll characters in this font will look pixel-perfect at font size multiples of {lcm}px')
-
-# TTF metadata includes a name and creation date
-# this information isn't in the jar, so we have to provide it ourselves
-def default_font_info(identifier: VANILLA_FONT_ID) -> tuple[str, datetime.datetime]:
-    cache: dict[VANILLA_FONT_ID, tuple[str, datetime.datetime]] = {
-        # release time of 0.0.2a, the first version to have a font, according to the wiki: https://minecraft.wiki/w/Java_Edition_Classic_0.0.2a
-        'minecraft:default': ('Default', datetime.datetime.fromisoformat('2009-05-16T16:52:00Z')),
-        # release time of b1.9-pre3, the first version to include enchanting, according to the wiki: https://minecraft.wiki/w/Java_Edition_Beta_1.9_Prerelease_3
-        'minecraft:alt': ('Enchanting', datetime.datetime.fromisoformat('2011-10-06T14:57:00Z')),
-        # release time of 21w37a, the first version to include this font, according to the manifest: https://piston-meta.mojang.com/v1/packages/7dfcb7bb54ac9e9b927627ef2a70d922543bb8bf/21w37a.json
-        'minecraft:illageralt': ('Illager Runes', datetime.datetime.fromisoformat('2021-09-15T16:04:30Z')),
-    }
-    return cache[identifier]
 
 def image_has_color(image: PIL.Image.Image) -> bool:
     # sometimes there are multiple fully transparent colors, so look for more than just 2

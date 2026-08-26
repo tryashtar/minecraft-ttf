@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import json
 import pathlib
 import typing
@@ -24,7 +25,24 @@ from minecraft_ttf.minecraft.storage import Storage
 
 # throughout Minecraft's history, the implementation of fonts has changed
 # if we want to generate fonts from older versions, we need to detect how that version handled fonts, and adapt that to modern providers
-VANILLA_FONT_ID = typing.Literal['minecraft:default', 'minecraft:alt', 'minecraft:illageralt']
+VANILLA_FONT_ID = typing.Literal['minecraft:default', 'minecraft:alt', 'minecraft:illageralt', 'minecraft:uniform']
+
+# TTF metadata includes a name and creation date
+# this information isn't in the jar, so we have to provide it ourselves
+def default_font_info(identifier: VANILLA_FONT_ID) -> tuple[str, datetime.datetime]:
+    match identifier:
+        case 'minecraft:default':
+            # release time of 0.0.2a, the first version to have a font, according to the wiki: https://minecraft.wiki/w/Java_Edition_Classic_0.0.2a
+            return ('Default', datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'))
+        case 'minecraft:alt':
+            # release time of b1.9-pre3, the first version to include enchanting, according to the wiki: https://minecraft.wiki/w/Java_Edition_Beta_1.9_Prerelease_3
+            return ('Enchanting', datetime.datetime.fromisoformat('2011-10-06T14:57:00Z'))
+        case 'minecraft:illageralt':
+            # release time of 21w37a, the first version to include this font, according to the manifest: https://piston-meta.mojang.com/v1/packages/7dfcb7bb54ac9e9b927627ef2a70d922543bb8bf/21w37a.json
+            return ('Illager Runes', datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'))
+        case 'minecraft:uniform':
+            # release time of 11w49a, the first version to include this font, according to the wiki: https://minecraft.wiki/w/Java_Edition_11w49a
+            return ('Unicode', datetime.datetime.fromisoformat('2011-12-08T16:05:26Z'))
 
 @dataclasses.dataclass
 class MinecraftVersion:
@@ -36,7 +54,7 @@ class MinecraftVersion:
     hardcoded_spaces: dict[str, float] | None
     hardcoded_unifont: tuple[str, pathlib.PurePath] | None
     uneven_unifont: bool
-    entry_map: dict[VANILLA_FONT_ID, pathlib.PurePath] | None
+    entry_map: dict[VANILLA_FONT_ID, pathlib.PurePath | None] | None
 
 def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
     names = jar.namelist()
@@ -143,9 +161,10 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             uneven_unifont = True,
             entry_map = None,
         )
-    asset_map: dict[VANILLA_FONT_ID, pathlib.PurePath] = {
+    asset_map: dict[VANILLA_FONT_ID, pathlib.PurePath | None] = {
         'minecraft:default': pathlib.PurePath('assets/minecraft/textures/font/ascii.png'),
         'minecraft:alt': pathlib.PurePath('assets/minecraft/textures/font/ascii_sga.png'),
+        'minecraft:uniform': None,
     }
     new_unifont = ('assets/minecraft/textures/font/unicode_page_%x.png', pathlib.PurePath('assets/minecraft/font/glyph_sizes.bin'))
     if 'font.txt' not in names and 'assets/minecraft/textures/font/ascii.png' in names:
@@ -192,9 +211,6 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             uneven_unifont = True,
             entry_map = asset_map
         )
-    old_map: dict[VANILLA_FONT_ID, pathlib.PurePath] = {
-        'minecraft:default': pathlib.PurePath('font/default.png'), 'minecraft:alt': pathlib.PurePath('font/alternate.png')
-    }
     if 'font/glyph_sizes.bin' in names:
         return MinecraftVersion(
             name = '11w49a+',
@@ -205,7 +221,11 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = ('font/glyph_%X.png', pathlib.PurePath('font/glyph_sizes.bin')),
             uneven_unifont = True,
-            entry_map = old_map
+            entry_map = {
+                'minecraft:default': pathlib.PurePath('font/default.png'),
+                'minecraft:alt': pathlib.PurePath('font/alternate.png'),
+                'minecraft:uniform': None
+            }
         )
     if 'font/alternate.png' in names:
         return MinecraftVersion(
@@ -217,9 +237,12 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_spaces = simple_spaces,
             hardcoded_unifont = None,
             uneven_unifont = True,
-            entry_map = old_map
+            entry_map = {
+                'minecraft:default': pathlib.PurePath('font/default.png'),
+                'minecraft:alt': pathlib.PurePath('font/alternate.png')
+            }
         )
-    simple_map: dict[VANILLA_FONT_ID, pathlib.PurePath] = {
+    simple_map: dict[VANILLA_FONT_ID, pathlib.PurePath | None] = {
         'minecraft:default': pathlib.PurePath('font/default.png'),
     }
     if 'font.txt' in names:
@@ -346,8 +369,8 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
     if version.entry_map is not None:
         if identifier not in version.entry_map:
             return None
-        if not (identifier == 'minecraft:default' and options.option_uniform):
-            img_entry = version.entry_map[identifier]
+        img_entry = version.entry_map[identifier]
+        if not (identifier == 'minecraft:default' and options.option_uniform) and img_entry is not None:
             img_data = read_image(store, img_entry)
             times.update(img_data.modified_date)
             if version.hardcoded_chars is not None:

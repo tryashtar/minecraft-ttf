@@ -393,7 +393,7 @@ def legacy_unicode(store: Storage, sheets: list[pathlib.PurePath], size_bytes: b
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
-                chars = {x: CharImage(img, bm, advance(bm), 1) for x, (img, bm) in chars.items()},
+                chars = {x: CharImage(img, bm, advance(bm), 0.5) for x, (img, bm) in chars.items()},
             )
             result.append(full)
     return result

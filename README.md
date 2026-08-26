@@ -6,6 +6,7 @@ The script downloads the latest snapshot jar and reads the following font defini
 * [Default](https://minecraft.wiki/w/Mojangles) (`minecraft:default`): The default game text font
 * [Enchanting](https://minecraft.wiki/w/Standard_Galactic_Alphabet) (`minecraft:alt`): The font used in enchanting table spells
 * [Illager Runes](https://minecraft.wiki/w/Illageralt) (`minecraft:illageralt`): An unused font added in 1.18, inspired by *Minecraft Dungeons*
+* [Unicode](https://minecraft.wiki/w/GNU_Unifont) (`minecraft:uniform`): The smaller font used when the "Force Unicode Font" option is enabled
 
 It creates regular, bold, italic, and bold italic variants of each, matching the `bold` and `italic` styles as they appear in-game.
 
@@ -28,49 +29,26 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 
 There are four operations that the script can perform. You can use `--help` on a partial command to see the available options as well.
 
-**`vanilla generate <version>`**  
-Download the specified version of Minecraft and generate vanilla fonts. You can use `latest` to use the latest available snapshot version.
-
-**`vanilla history`**  
-Download *every* version of Minecraft, generate vanilla fonts from each of them in order, and export whenever an update made any changes to a font. This takes a while and downloads a lot of stuff. You can use `--start` and `--stop` to define a range of versions to download.
-
-**`pack generate <version> <location> <identifier> <name>`**  
-Generate a font from a resource pack. The pack is applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. The pack can be a folder or zip archive. The specified `name` is embedded in the generated TTF metadata.
-
-**`pack list <version> <location>`**  
-Print a list of font identifiers available in a resource pack. You can pass any of these to `pack generate` above.
+|Command|Description|
+|-|-|
+|`vanilla generate <version>`|Download the specified version of Minecraft and generate vanilla fonts. You can use `latest` to use the latest available snapshot version.|
+|`vanilla history`|Download *every* version of Minecraft, generate vanilla fonts from each of them in order, and export whenever an update made any changes to a font. This takes a while and downloads a lot of stuff. You can use `--start` and `--stop` to define a range of versions to download.|
+|`pack generate <version> <location> <identifier> <name>`|Generate a font from a resource pack. The pack is applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. The pack can be a folder or zip archive. The specified `name` is embedded in the generated TTF metadata.|
+|`pack list <version> <location>`|Print a list of font identifiers available in a resource pack. You can pass any of these to `pack generate` above.|
 
 ### Optional Parameters
 
-`--identifiers`  
-For vanilla generation, specify one or more vanilla fonts to generate, from the three options `minecraft:default`, `minecraft:alt`, `minecraft:illageralt`. Defaults to all three. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers).
-
-`--styles`  
-Specify one or more font styles to include, from the four options `regular`, `bold`, `italic`, `bold_italic`. Defaults to all four.
-
-`--color`  
-Specify which characters that come from images should be given color. Defaults to `auto`. Vanilla typically does not use colors, except for the potato emoji character (🥔) in [the 24w14potato April Fools update](https://minecraft.wiki/w/Java_Edition_24w14potato). Resource packs may use colors extensively.
-* `always`: All characters will have color matching their image appearance. This makes all vanilla text white.
-* `never`: All characters will have color ignored, appearing as normal outlined glyphs.
-* `auto`: Images that only use white and transparency will produce normal outlined glyphs. Images that use other colors will produce colored characters.
-
-`--chars`  
-Specify ranges of characters to include. Written as a comma-delimited list of hyphen-separated hex code pairs. For example, ASCII plus Greek is `0000-007f,0370-03ff`. Defaults to all characters.
-
-`--unifont-chars`  
-Specify ranges of characters from GNU Unifont sources to include, in the same format. Defaults to no characters. In older versions, Unifont sources come from various hardcoded images. In modern versions, they come from the `unihex` font provider. Including them all is not possible, since there are more glyphs than a TTF font can include.
-
-`--option-uniform`  
-Enabling this will generate the font as if you had the "Force Unicode Font" option in Font Settings enabled. Make sure to use `--unifont-chars` as well, to specify the characters you want. In older versions, this was hardcoded behavior. In modern versions, this corresponds to the `uniform` font provider filter.
-
-`--option-jp`  
-Enabling this will generate the font as if you had the "Japanese Glyph Variants" option in Font Settings enabled. This corresponds to the `jp` font provider filter.
-
-`--output`  
-Folder path where generated fonts are placed. Defaults to `out`.
-
-`--cache`  
-Folder path for downloaded assets. Resembles the [launcher directory (`.minecraft`)](https://minecraft.wiki/w/.minecraft) structure, so you can point it there if you like. Defaults to `cache`.
+|Option & Default|Description|
+|-|-|
+|`--identifiers minecraft:default`|For vanilla generation, specify one or more vanilla fonts to generate, from the four options `minecraft:default`, `minecraft:alt`, `minecraft:illageralt`, `minecraft:uniform`. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers). When using `minecraft:uniform`, make sure to use `--unifont-chars` as well, to specify the characters you want.|
+|`--styles regular`|Specify one or more font styles to include, from the four options `regular`, `bold`, `italic`, `bold_italic`.|
+|`--color auto`|Specify which characters that come from images should be given color. Vanilla typically does not use colors, except for the potato emoji character (🥔) in [the 24w14potato April Fools update](https://minecraft.wiki/w/Java_Edition_24w14potato). Resource packs may use colors extensively.<ul><li>`always`: All characters will have color matching their image appearance. This makes all vanilla text white.</li><li>`never`: All characters will have color ignored, appearing as normal outlined glyphs.</li><li>`auto`: Images that only use white and transparency will produce normal outlined glyphs. Images that use other colors will produce colored characters.</li><ul>|
+|`--chars 00000-fffff`|Specify ranges of characters to include. Written as a comma-delimited list of hyphen-separated hex code pairs. For example, ASCII plus Greek is `0000-007f,0370-03ff`.|
+|`--unifont-chars 00000-00000`|Specify ranges of characters from GNU Unifont sources to include, in the same format. In older versions, Unifont sources come from various hardcoded images. In modern versions, they come from the `unihex` font provider. Including them all is not possible, since there are more glyphs than a TTF font can include.|
+|`--option-uniform`|Enabling this will generate the font as if you had the "Force Unicode Font" option in Font Settings enabled. Make sure to use `--unifont-chars` as well, to specify the characters you want. In older versions, this was hardcoded behavior. In modern versions, this corresponds to the `uniform` font provider filter.|
+|`--option-jp`|Enabling this will generate the font as if you had the "Japanese Glyph Variants" option in Font Settings enabled. This corresponds to the `jp` font provider filter.|
+|`--output ./out`|Folder path where generated fonts are placed.|
+|`--cache ./cache`|Folder path for downloaded assets. Resembles the [launcher directory (`.minecraft`)](https://minecraft.wiki/w/.minecraft) structure, so you can point it there if you like.|
 
 ## Extended Characters
 

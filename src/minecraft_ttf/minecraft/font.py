@@ -26,13 +26,15 @@ from minecraft_ttf.vectorize import TrackingPen, trace_bitmap, vectorize
 STYLE = typing.Literal['regular', 'italic', 'bold', 'bold_italic']
 
 def style_info(style: STYLE) -> tuple[str, bool, bool]:
-    cache: dict[STYLE, tuple[str, bool, bool]] = {
-        'regular': ('Regular', False, False),
-        'italic': ('Italic', False, True),
-        'bold': ('Bold', True, False),
-        'bold_italic': ('Bold Italic', True, True),
-    }
-    return cache[style]
+    match style:
+        case 'regular':
+            return ('Regular', False, False)
+        case 'italic':
+            return ('Italic', False, True)
+        case 'bold':
+            return ('Bold', True, False)
+        case 'bold_italic':
+            return ('Bold Italic', True, True)
 
 @dataclasses.dataclass
 class FontStyleInfo:
@@ -86,6 +88,15 @@ def create_font_family(
         char_height = height * pixel_scale
         base_walks = trace_bitmap(base_layer)
         colored_walks = [(trace_bitmap(bitmap), color) for bitmap, color in colored_layers]
+        pixel_bold_offset = bold_offset * m_height / height
+        if pixel_bold_offset.is_integer():
+            int_offset = int(pixel_bold_offset)
+            bold_mask = Bitmap((base_layer.width + int_offset, m_height))
+            bold_mask.draw(base_layer, (0, 0))
+            bold_mask.draw(base_layer, (int_offset, 0))
+            bold_walks = trace_bitmap(bold_mask)
+        else:
+            bold_walks = None
         def make_char_info(bold: bool, italic: bool):
             scale = height / m_height * pixel_scale
             offset_x = -6 / height if italic else 0
@@ -97,9 +108,14 @@ def create_font_family(
                 if path is not None:
                     colored_paths.append(ColoredLayer(path, color))
             offsets = [(0.0, 0.0)]
+            char_advance = char_width
             if bold:
-                offsets.append((bold_offset * pixel_scale, 0.0))
-            return GlyphInfo(char_width, char_height, base_path, colored_paths, offsets)
+                if bold_walks is not None:
+                    char_advance = char_width + (bold_offset * pixel_scale)
+                    base_path = vectorize(bold_walks, pen)
+                else:
+                    offsets.append((bold_offset * pixel_scale, 0.0))
+            return GlyphInfo(char_advance, char_height, base_path, colored_paths, offsets)
         if 'regular' in styles:
             picker(fonts['regular'])[char] = make_char_info(bold=False, italic=False)
         if 'italic' in styles:
