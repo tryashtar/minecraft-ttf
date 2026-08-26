@@ -21,7 +21,7 @@ from minecraft_ttf.minecraft.providers import (
     Provider,
     SpaceProvider,
 )
-from minecraft_ttf.vectorize import vectorize
+from minecraft_ttf.vectorize import TrackingPen, trace_bitmap, vectorize
 
 STYLE = typing.Literal['regular', 'italic', 'bold', 'bold_italic']
 
@@ -81,17 +81,19 @@ def create_font_family(
         if height_ratio not in scales:
             scales[height_ratio] = []
         scales[height_ratio].append(char)
-        step_size = (0, 0) if height == 0 else (0, (height - ascent) / height * m_height)
-        italic_step_size = (0, 0) if height == 0 else (-6 / height, (height - ascent) / height * m_height)
+        offset_y = 0 if height == 0 else (height - ascent) / height * m_height
         char_width = advance * pixel_scale
         char_height = height * pixel_scale
+        base_walks = trace_bitmap(base_layer)
+        colored_walks = [(trace_bitmap(bitmap), color) for bitmap, color in colored_layers]
         def make_char_info(bold: bool, italic: bool):
             scale = height / m_height * pixel_scale
-            step = italic_step_size if italic else step_size
-            base_path = vectorize(base_layer, scale, step, italic=italic)
+            offset_x = -6 / height if italic else 0
+            pen = TrackingPen(m_height, scale, (offset_x, offset_y), 4 if italic else None)
+            base_path = vectorize(base_walks, pen)
             colored_paths: list[ColoredLayer] = []
-            for mask, color in colored_layers:
-                path = vectorize(mask, scale, step, italic=italic)
+            for walk, color in colored_walks:
+                path = vectorize(walk, pen)
                 if path is not None:
                     colored_paths.append(ColoredLayer(path, color))
             offsets = [(0.0, 0.0)]
@@ -113,7 +115,7 @@ def create_font_family(
             for x in range(mw):
                 if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
                     missing.set_at((x, y), True)
-    add_bitmap_glyph(lambda x: x.other_glyphs, '.notdef', missing, [], advance=6, bold_offset=1, height=8, ascent=8)
+    add_bitmap_glyph(lambda x: x.other_glyphs, '.notdef', missing, [], advance=6, bold_offset=1, height=8, ascent=7)
     for provider in provider_list:
         if isinstance(provider, SpaceProvider):
             for char, width in provider.spaces.items():
