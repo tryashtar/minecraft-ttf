@@ -1,3 +1,4 @@
-out/
-cache/
+/out
+/cache
 __pycache__
+target/

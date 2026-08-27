@@ -1,0 +1,8 @@
+[package]
+name = "minecraft-ttf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitmap-ttf = { path = "../bitmap-ttf"}
+image = "0.25.10"
