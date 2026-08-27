@@ -297,7 +297,7 @@ def read_font_definition(store: Storage, entry: pathlib.PurePath) -> list[ReadEn
     if isinstance(store, StackStorage):
         stack_sources = store.stack
     result: list[ReadEntry[JsonProvider]] = []
-    for member in stack_sources:
+    for member in reversed(stack_sources):
         if member.exists(entry):
             data: ReadEntry[JsonRootProvider] = read_json(member, entry)
             for provider in data.data['providers']:
