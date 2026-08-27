@@ -5,6 +5,7 @@ import pathlib
 import typing
 import zipfile
 
+from minecraft_ttf.bitmap import Bitmap
 from minecraft_ttf.minecraft.providers import (
     CharImage,
     ImageProvider,
@@ -14,12 +15,12 @@ from minecraft_ttf.minecraft.providers import (
     ProviderSupport,
     ReadEntry,
     SpaceProvider,
-    filter_nul,
     image_grid,
     legacy_unicode,
     load_providers,
     normal_advance,
     read_image,
+    split_grid,
 )
 from minecraft_ttf.minecraft.storage import Storage
 
@@ -49,9 +50,10 @@ class MinecraftVersion:
     name: str
     providers: ProviderSupport
     asset_mount: pathlib.PurePath
-    hardcoded_chars: list[str] | None
+    hardcoded_chars: list[list[str | None]] | None
     lookup_chars: pathlib.PurePath | None
     hardcoded_spaces: dict[str, float] | None
+    hardcoded_sizes: dict[str, float] | None
     hardcoded_unifont: tuple[str, pathlib.PurePath] | None
     uneven_unifont: bool
     entry_map: dict[VANILLA_FONT_ID, pathlib.PurePath | None] | None
@@ -84,6 +86,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = None,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
@@ -96,6 +99,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = None,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = False,
             entry_map = None,
@@ -108,6 +112,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = None,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
@@ -120,6 +125,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = None,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
@@ -132,6 +138,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
@@ -144,6 +151,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
@@ -157,6 +165,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
@@ -176,25 +185,26 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             asset_mount = pathlib.PurePath('assets'),
             providers = ProviderSupport.NONE,
             hardcoded_chars = [
-                '\u00c0\u00c1\u00c2\u00c8\u00ca\u00cb\u00cd\u00d3\u00d4\u00d5\u00da\u00df\u00e3\u00f5\u011f\u0130',
-                '\u0131\u0152\u0153\u015e\u015f\u0174\u0175\u017e\u0207\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
-                ' !"#$%&\'()*+,-./',
-                '0123456789:;<=>?',
-                '@ABCDEFGHIJKLMNO',
-                'PQRSTUVWXYZ[\\]^_',
-                '`abcdefghijklmno',
-                'pqrstuvwxyz{|}~\u0000',
-                '\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5',
-                '\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192',
-                '\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb',
-                '\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510',
-                '\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567',
-                '\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580',
-                '\u03b1\u03b2\u0393\u03c0\u03a3\u03c3\u03bc\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u2205\u2208\u2229',
-                '\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u0000',
+                [x for x in '\u00c0\u00c1\u00c2\u00c8\u00ca\u00cb\u00cd\u00d3\u00d4\u00d5\u00da\u00df\u00e3\u00f5\u011f\u0130'],
+                [x for x in '\u0131\u0152\u0153\u015e\u015f\u0174\u0175\u017e\u0207'] + ([None] * 7),
+                [x for x in ' !"#$%&\'()*+,-./'],
+                [x for x in '0123456789:;<=>?'],
+                [x for x in '@ABCDEFGHIJKLMNO'],
+                [x for x in 'PQRSTUVWXYZ[\\]^_'],
+                [x for x in '`abcdefghijklmno'],
+                [x for x in 'pqrstuvwxyz{|}~'] + [None],
+                [x for x in '\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5'],
+                [x for x in '\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192'],
+                [x for x in '\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb'],
+                [x for x in '\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510'],
+                [x for x in '\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567'],
+                [x for x in '\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580'],
+                [x for x in '\u03b1\u03b2\u0393\u03c0\u03a3\u03c3\u03bc\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u2205\u2208\u2229'],
+                [x for x in '\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0'] + [None],
             ],
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = new_unifont,
             uneven_unifont = True,
             entry_map = asset_map
@@ -207,6 +217,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = new_unifont,
             uneven_unifont = True,
             entry_map = asset_map
@@ -219,6 +230,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = ('font/glyph_%X.png', pathlib.PurePath('font/glyph_sizes.bin')),
             uneven_unifont = True,
             entry_map = {
@@ -235,6 +247,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = {
@@ -253,11 +266,12 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = None,
             lookup_chars = pathlib.PurePath('font.txt'),
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = simple_map
         )
-    empty = '\u0000' * 16
+    empty: list[str | None] = [None] * 16
     if 'lang/en_US.lang' in names:
         return MinecraftVersion(
             name = 'b1.0+',
@@ -267,39 +281,40 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = [
                 empty,
                 empty,
-                ' !"#$%&\'()*+,-./',
-                '0123456789:;<=>?',
-                '@ABCDEFGHIJKLMNO',
-                'PQRSTUVWXYZ[\\]^_',
-                '\'abcdefghijklmno',
-                'pqrstuvwxyz{|}~\u00e2',
-                '\u0152\u201a\u00c3\u2021\u00c3\u00bc\u00c3\u00a9\u00c3\u00a2\u00c3\u00a4\u00c3\u00a0\u00c3\u00a5',
-                '\u00c3\u00a7\u00c3\u00aa\u00c3\u00ab\u00c3\u00a8\u00c3\u00af\u00c3\u00ae\u00c3\u00ac\u00c3\u201e',
-                '\u00c3\u2026\u00c3\u2030\u00c3\u00a6\u00c3\u2020\u00c3\u00b4\u00c3\u00b6\u00c3\u00b2\u00c3\u00bb',
-                '\u00c3\u00b9\u00c3\u00bf\u00c3\u2013\u00c3\u0153\u00c3\u00b8\u00c2\u00a3\u00c3\u02dc\u00c3\u2014',
-                '\u00c6\u2019\u00c3\u00a1\u00c3\u00ad\u00c3\u00b3\u00c3\u00ba\u00c3\u00b1\u00c3\u2018\u00c2\u00aa',
-                '\u00c2\u00ba\u00c2\u00bf\u00c2\u00ae\u00c2\u00ac\u00c2\u00bd\u00c2\u00bc\u00c2\u00a1\u00c2\u00ab',
-                '\u00c2\u00bb' + ('\u0000' * 14),
+                [x for x in ' !"#$%&\'()*+,-./'],
+                [x for x in '0123456789:;<=>?'],
+                [x for x in '@ABCDEFGHIJKLMNO'],
+                [x for x in 'PQRSTUVWXYZ[\\]^_'],
+                [x for x in '\'abcdefghijklmno'],
+                [x for x in 'pqrstuvwxyz{|}~\u00e2'],
+                [x for x in '\u0152\u201a\u00c3\u2021\u00c3\u00bc\u00c3\u00a9\u00c3\u00a2\u00c3\u00a4\u00c3\u00a0\u00c3\u00a5'],
+                [x for x in '\u00c3\u00a7\u00c3\u00aa\u00c3\u00ab\u00c3\u00a8\u00c3\u00af\u00c3\u00ae\u00c3\u00ac\u00c3\u201e'],
+                [x for x in '\u00c3\u2026\u00c3\u2030\u00c3\u00a6\u00c3\u2020\u00c3\u00b4\u00c3\u00b6\u00c3\u00b2\u00c3\u00bb'],
+                [x for x in '\u00c3\u00b9\u00c3\u00bf\u00c3\u2013\u00c3\u0153\u00c3\u00b8\u00c2\u00a3\u00c3\u02dc\u00c3\u2014'],
+                [x for x in '\u00c6\u2019\u00c3\u00a1\u00c3\u00ad\u00c3\u00b3\u00c3\u00ba\u00c3\u00b1\u00c3\u2018\u00c2\u00aa'],
+                [x for x in '\u00c2\u00ba\u00c2\u00bf\u00c2\u00ae\u00c2\u00ac\u00c2\u00bd\u00c2\u00bc\u00c2\u00a1\u00c2\u00ab'],
+                ['\u00c2', '\u00bb'] + ([None] * 14),
                 empty,
             ],
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = simple_map
         )
-    alpha_chars = [
+    alpha_chars: list[list[str | None]] = [
         empty,
         empty,
-        ' !"#$%&\'()*+,-./',
-        '0123456789:;<=>?',
-        '@ABCDEFGHIJKLMNO',
-        'PQRSTUVWXYZ[\\]^_',
-        '\'abcdefghijklmno',
-        'pqrstuvwxyz{|}~\u2302',
-        '\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5',
-        '\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192',
-        '\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb',
+        [x for x in ' !"#$%&\'()*+,-./'],
+        [x for x in '0123456789:;<=>?'],
+        [x for x in '@ABCDEFGHIJKLMNO'],
+        [x for x in 'PQRSTUVWXYZ[\\]^_'],
+        [x for x in '\'abcdefghijklmno'],
+        [x for x in 'pqrstuvwxyz{|}~\u2302'],
+        [x for x in '\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5'],
+        [x for x in '\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192'],
+        [x for x in '\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb'],
         empty,
         empty,
         empty,
@@ -314,6 +329,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = alpha_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = simple_map
@@ -328,11 +344,13 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = alpha_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = {'minecraft:default': pathlib.PurePath('default.png')}
         )
-    full_chars = [''.join(chr(x) for x in range(y * 16, (y + 1) * 16)) for y in range(16)]
+    full_chars: list[list[str | None]] = [[chr(x) for x in range(y * 16, (y + 1) * 16)] for y in range(16)]
+    zero_width = {chr(x): 0.0 for x in range(0x80, 0xff + 1)}
     if 'default.png' in names:
         return MinecraftVersion(
             name = 'c0.0.17a+',
@@ -341,18 +359,20 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             hardcoded_chars = full_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = zero_width,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = {'minecraft:default': pathlib.PurePath('default.png')}
         )
     if 'default.gif' in names:
         return MinecraftVersion(
-            name = 'c0.0.11a+',
+            name = 'c0.0.2a+',
             asset_mount = pathlib.PurePath(),
             providers = ProviderSupport.NONE,
             hardcoded_chars = full_chars,
             lookup_chars = None,
             hardcoded_spaces = simple_spaces,
+            hardcoded_sizes = zero_width,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = {'minecraft:default': pathlib.PurePath('default.gif')}
@@ -378,26 +398,34 @@ def get_providers(version: MinecraftVersion, store: Storage, identifier: str, op
             else:
                 assert version.lookup_chars is not None
                 font_data = read_font_txt(store, version.lookup_chars)
+                font_chars = split_grid(font_data.data, filter_nul=False, surrogates=False)
                 times.update(font_data.modified_date)
-                empty = '\u0000' * 16
-                char_grid: list[str] = [
+                empty: list[str | None] = [None] * 16
+                char_grid: list[list[str | None]] = [
                     empty,
                     empty,
-                    *font_data.data,
+                    *font_chars,
                     empty,
                     empty,
                     empty,
                     empty,
                     empty
                 ]
-            chars = image_grid(img_data.data, filter_nul(char_grid), None, options.all_char_predicate)
-            bitmap = ImageProvider(
+            chars = image_grid(img_data.data, char_grid, None, options.all_char_predicate)
+            def char_advance(char: str, bitmap: Bitmap) -> float:
+                if version.hardcoded_sizes is not None and char in version.hardcoded_sizes:
+                    return version.hardcoded_sizes[char]
+                normal = normal_advance(bitmap, 8)
+                if version.hardcoded_sizes is None:
+                    return normal
+                return 8 if normal == 9 else normal
+            provider = ImageProvider(
                 height = 8,
                 ascent = 7,
                 has_color = options.image_color_predicate(img_data.data),
-                chars = {x: CharImage(img, bm, normal_advance(bm, 8), 1) for x, (img, bm) in chars.items()},
+                chars = {x: CharImage(img, bm, char_advance(x, bm), 1) for x, (img, bm) in chars.items()},
             )
-            providers.append(bitmap)
+            providers.append(provider)
     if version.hardcoded_spaces is not None:
         providers.insert(0, SpaceProvider({x: y for x, y in version.hardcoded_spaces.items() if options.all_char_predicate(x)}))
     if version.hardcoded_unifont is not None:

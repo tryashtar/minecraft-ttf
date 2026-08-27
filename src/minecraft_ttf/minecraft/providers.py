@@ -172,7 +172,7 @@ def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOp
             img_data = read_image(store, img_entry)
             times.update(img_data.modified_date)
             height = provider.get('height', 8)
-            char_dict = image_grid(img_data.data, filter_nul(provider['chars']), None, options.all_char_predicate)
+            char_dict = image_grid(img_data.data, split_grid(provider['chars'], filter_nul=True, surrogates=True), None, options.all_char_predicate)
             full = ImageProvider(
                 height = height,
                 ascent = provider['ascent'],
@@ -324,7 +324,7 @@ def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict
     glyph_height = image.height // len(grid)
     for y, row in enumerate(grid):
         for x, char in enumerate(row):
-            if char is None or not include(char):
+            if char is None or not include(char) or char in result:
                 continue
             gx1 = x * glyph_width
             gy1 = y * glyph_height
@@ -348,10 +348,10 @@ def image_grid(image: PIL.Image.Image, grid: list[list[str | None]], sizes: dict
             result[char] = (cropped_glyph, cropped_mask)
     return result
 
-def filter_nul(chars: list[str]) -> list[list[str | None]]:
-    encoded = [x.encode('utf-16', 'surrogatepass').decode('utf-16') for x in chars]
+def split_grid(chars: list[str], filter_nul: bool, surrogates: bool) -> list[list[str | None]]:
+    encoded = [x.encode('utf-16', 'surrogatepass').decode('utf-16') for x in chars] if surrogates else chars
     assert all(len(x) == len(encoded[0]) for x in encoded)
-    return [[None if y == '\u0000' else y for y in x] for x in encoded]
+    return [[None if filter_nul and y == '\u0000' else y for y in x] for x in encoded]
 
 def char_size(char: str, bitmap: Bitmap, overrides: list[UnihexSizeOverride]) -> tuple[int, int]:
     for entry in overrides:
