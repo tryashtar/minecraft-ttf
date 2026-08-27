@@ -1,201 +1,334 @@
-import datetime
-import io
-import json
+import argparse
+import dataclasses
+import math
 import pathlib
-import zipfile
+import typing
 
 import PIL.Image
-import requests
 
-from minecraft_ttf.bitmap import Bitmap, bitmap_from_image
-from minecraft_ttf.font import CharInfo, FontInfo, FontPositions, make_font, vectorize
+from cache import (
+    get_aglfn,
+    get_manifest,
+    jar_info,
+    version_from_data,
+)
+from minecraft_ttf.bitmap import get_palette_rgba
+from minecraft_ttf.font import GlyphInfo
+from minecraft_ttf.minecraft.font import (
+    STYLE,
+    FontFamilyInfo,
+    create_font_family,
+    finalize_font,
+    style_info,
+)
+from minecraft_ttf.minecraft.providers import (
+    ModifiedTimes,
+    ProviderOptions,
+    ProviderSupport,
+)
+from minecraft_ttf.minecraft.storage import (
+    StackStorage,
+    Storage,
+    get_storage,
+)
+from minecraft_ttf.minecraft.versions import (
+    VANILLA_FONT_ID,
+    MinecraftVersion,
+    default_font_info,
+    get_providers,
+)
 
 
 def main():
-    latest = get_latest()
-    name = latest['id']
-    meta_url = latest['url']
-    cached_path = pathlib.Path('cache') / f'minecraft-{name}.jar'
-    if not cached_path.exists():
-        print(f'Downloading minecraft jar {name}...')
-        response = requests.get(meta_url)
-        data = response.json()
-        client_jar = data['downloads']['client']['url']
-        response = requests.get(client_jar)
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'wb') as f:
-            f.writelines(response.iter_content(chunk_size=16 * 1024))
-    aglfn = get_aglfn()
-    print('Converting fonts...')
-    with zipfile.ZipFile(cached_path, 'r') as jar:
-        # TTF metadata includes a creation date
-        # this information isn't in the jar, so we have to provide it ourselves
-        convert_font('Default', 'assets/minecraft/font/default.json', jar, datetime.datetime.fromisoformat('2009-05-16T16:52:00Z'), aglfn)
-        convert_font('Enchanting', 'assets/minecraft/font/alt.json', jar, datetime.datetime.fromisoformat('2011-10-06T00:00:00Z'), aglfn)
-        convert_font('Illager Runes', 'assets/minecraft/font/illageralt.json', jar, datetime.datetime.fromisoformat('2021-09-15T16:04:30Z'), aglfn)
-    print('Done!')
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest='command', required=True, help='Which operation to perform')
+    vanilla = commands.add_parser('vanilla', help='Generate TTF fonts from the vanilla game jar')
+    vanilla_action = vanilla.add_subparsers(dest='action', required=True, help='Which operation to perform')    
+    vanilla_generate = vanilla_action.add_parser('generate', help='Generate TTF fonts from a specific version')
+    vanilla_generate.add_argument('version', type=str, help='Name of the Minecraft version to download, or "latest"')
+    vanilla_history = vanilla_action.add_parser('history', help='Generate all unique TTF fonts across Minecraft\'s history')
+    vanilla_history.add_argument('--start', type=str, help='First version to scan')
+    vanilla_history.add_argument('--end', type=str, help='Last version to scan')
+    pack = commands.add_parser('pack', help='List or generate fonts from a resource pack')
+    pack_action = pack.add_subparsers(dest='action', required=True, help='Which operation to perform')
+    pack_list = pack_action.add_parser('list', help='List available font identifiers')
+    pack_generate = pack_action.add_parser('generate', help='Generate one TTF font from a resource pack')
+    for entry in (pack_generate, pack_list):
+        entry.add_argument('version', type=str, help='Name of the Minecraft version the resource pack is targeting, or "latest"')
+        entry.add_argument('location', type=pathlib.Path, help='Path to the resource pack folder or zip file')
+    pack_generate.add_argument('identifier', type=str, help='Identifier of the font definition to use, e.g. "minecraft:default"')
+    pack_generate.add_argument('name', type=str, help='Display name for the generated TTF font')
+    for entry in (vanilla_generate, vanilla_history):
+        entry.add_argument('--identifiers', type=str, nargs='*', default=['minecraft:default'], choices=typing.get_args(VANILLA_FONT_ID), help='Identifiers of the font definitions to generate fonts from')
+    for entry in (vanilla_generate, vanilla_history, pack_generate):
+        entry.add_argument('--styles', type=str, nargs='*', default=['regular'], choices=typing.get_args(STYLE), help='Styles to generate')
+        entry.add_argument('--color', type=str, default='auto', choices=['never', 'always', 'auto'], help='When to include color for characters that come from images (auto = only if any part of the image is not solid white)')
+        entry.add_argument('--chars', type=str, default='00000-fffff', help='Ranges of characters to include. Example: "0020-007e,0370-03ff"')
+        entry.add_argument('--unifont-chars', type=str, default='', help='Ranges of characters from GNU unifont providers to include. Example: "0000-ffff"')
+        entry.add_argument('--option-uniform', default=False, action=argparse.BooleanOptionalAction, help='Act as though the "Force Unicode Font" option was enabled')
+        entry.add_argument('--option-jp', default=False, action=argparse.BooleanOptionalAction, help='Act as though the "Japanese Glyph Variants" option was enabled')
+        entry.add_argument('--output', type=pathlib.Path, default=pathlib.Path('out'), help='Folder to save the generated fonts in')
+    for entry in (vanilla_generate, vanilla_history, pack_generate, pack_list):
+        entry.add_argument('--cache', type=pathlib.Path, default=pathlib.Path('cache'), help='Folder for cache files')
+    args = parser.parse_args()
+    match args.command:
+        case 'vanilla':
+            identifiers = set(args.identifiers)
+            match args.action:
+                case 'generate':
+                    main_vanilla_generate(args.version, identifiers, generator_options(args), args.cache)
+                case 'history':
+                    main_vanilla_history((args.start, args.end), identifiers, generator_options(args), args.cache)
+        case 'pack':
+            match args.action:
+                case 'generate':
+                    main_pack_generate(args.version, args.location, args.identifier, args.name, generator_options(args), args.cache)
+                case 'list':
+                    main_pack_list(args.version, args.location, args.cache)
 
-def get_latest() -> dict:
-    cached_path = pathlib.Path('cache') / 'manifest.json'
-    try:
-        with open(cached_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        print('Downloading version manifest...')
-        manifest_url = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
-        response = requests.get(manifest_url)
-        data = response.json()
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-    snapshot_id = data['latest']['snapshot']
-    for version in data['versions']:
-        if version['id'] == snapshot_id:
-            return version
-    raise ValueError(snapshot_id)
+@dataclasses.dataclass
+class GeneratorOptions:
+    provider: ProviderOptions
+    styles: set[STYLE]
+    output: pathlib.Path
 
-# The Adobe Glyph List For New Fonts tells us what names to use for the glyphs that characters are mapped to
-def get_aglfn() -> dict[str, str]:
-    cached_path = pathlib.Path('cache') / 'aglfn.txt'
-    if not cached_path.exists():
-        print('Downloading Adobe AGLFN...')
-        response = requests.get('https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/refs/heads/master/aglfn.txt')
-        cached_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cached_path, 'wb') as f:
-            f.writelines(response.iter_content(chunk_size=16 * 1024))
-    aglfn_map = {}
-    with open(cached_path, 'r', encoding='utf-8') as aglfn:
-        for line in aglfn:
-            if line.startswith('#') or line.isspace() or len(line) == 0:
-                continue
-            unihex, name, _uniname = line.split(';')
-            uninum = int(unihex, 16)
-            codepoint = chr(uninum)
-            aglfn_map[codepoint] = name
-    return aglfn_map
+def generator_options(args: argparse.Namespace) -> GeneratorOptions:
+    styles = set(args.styles)
+    color = {
+        'never': lambda _: False,
+        'always': lambda _: True,
+        'auto': image_has_color
+    }[args.color]
+    all_range = char_range(args.chars)
+    unifont_range = char_range(args.unifont_chars)
+    provider = ProviderOptions(
+        image_color_predicate = color,
+        all_char_predicate = lambda x: char_in_range(x, all_range),
+        unifont_char_predicate = lambda x: char_in_range(x, unifont_range),
+        option_uniform = args.option_uniform,
+        option_jp = args.option_jp,
+    )
+    return GeneratorOptions(provider, styles, args.output)
 
-def read_json(jar: zipfile.ZipFile, resource: str, kind: str) -> tuple[dict, datetime.datetime]:
-    namespace, rest = resource.split(':')
-    path = f'assets/{namespace}/{kind}/{rest}.json'
-    text = jar.read(path)
-    data = json.loads(text)
-    date = jar.getinfo(path).date_time
-    return (data, date_time(date))
+def char_in_range(char: str, range: list[tuple[int, int]]) -> bool:
+    int_char = ord(char)
+    for start, stop in range:
+        if int_char >= start and int_char <= stop:
+            return True
+    return False
 
-def read_image(jar: zipfile.ZipFile, resource: str) -> tuple[PIL.Image.Image, datetime.datetime]:
-    namespace, rest = resource.split(':')
-    path = f'assets/{namespace}/textures/{rest}'
-    data = jar.read(path)
-    img = PIL.Image.open(io.BytesIO(data))
-    date = jar.getinfo(path).date_time
-    return (img, date_time(date))
+def char_range(input: str) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    parts = [] if input == '' else input.split(',')
+    for part in parts:
+        start, stop = part.split('-', maxsplit=1)
+        result.append((int(start, 16), int(stop, 16)))
+    return result
 
-def date_time(jartime: tuple) -> datetime.datetime:
-    y, m, d, h, mm, s = jartime
-    return datetime.datetime(y, m, d, h, mm, s, 0, tzinfo=datetime.UTC)
+def main_vanilla_generate(version_id: str, identifiers: set[VANILLA_FONT_ID], options: GeneratorOptions, cache: pathlib.Path):
+    info = jar_info(version_id, cache)
+    if info is None:
+        return
+    print(f'Detected font capabilities: {info.version.name}')
+    aglfn = get_aglfn(cache)
+    print(f'Converting fonts from Minecraft {info.manifest['id']}')
+    store = StackStorage([info.jar_storage, info.asset_storage])
+    for identifier in identifiers:
+        vanilla_try_font(identifier, info.version, store, options, aglfn)
 
-def convert_font(name: str, entry: str, jar: zipfile.ZipFile, created_date: datetime.datetime, aglfn: dict[str, str]):
-    print(f'{name}...')
-    modified_date = date_time(jar.getinfo(entry).date_time)
-    text = jar.read(entry)
-    data = json.loads(text)
-    providers: list[dict] = []
-    providers.extend(data['providers'])
-    index = 0
-    while index < len(providers):
-        if providers[index]['type'] == 'reference':
-            (reference, date) = read_json(jar, providers[index]['id'], 'font')
-            modified_date = max(modified_date, date)
-            del providers[index]
-            providers[index:index] = reference['providers']
-        index += 1
-    seen_chars: set[str] = set()
-    fonts: dict[str, dict[str, CharInfo]] = {'Regular': {}, 'Bold': {}, 'Italic': {}, 'Bold Italic': {}}
-    chatbox_height = 12
-    font_em = 1200
-    pixel_scale = font_em / chatbox_height
-    # font textures have a color depth of 1 bit, so they are just 2D bitmasks
-    # this lets us leverage some efficient operations provided by pygame
-    def add_bitmap_glyph(char: str, mask: Bitmap, height: int, ascent: int):
-        m_width, m_height = mask.get_size()
-        seen_chars.add(char)
-        # bold characters are created by overlapping two copies of the texture
-        bold_mask = Bitmap((m_width + 1, m_height))
-        bold_mask.draw(mask, (0, 0))
-        bold_mask.draw(mask, (1, 0))
-        scale = height / m_height * pixel_scale
-        offset = (0, (height - ascent) / height * m_height)
-        italic_offset = (-6 / height, (height - ascent) / height * m_height)
-        (path, (w, h)) = vectorize(mask, scale, offset)
-        (italic_path, (iw, ih)) = vectorize(mask, scale, italic_offset, italic=True)
-        (bold_path, (bw, bh)) = vectorize(bold_mask, scale, offset)
-        (bold_italic_path, (biw, bih)) = vectorize(bold_mask, scale, italic_offset, italic=True)
-        add_width = m_height / height
-        fonts['Regular'][char] = CharInfo(width = (w + add_width) * scale, height = h * scale, path = path)
-        fonts['Italic'][char] = CharInfo(width = (iw + add_width) * scale, height = ih * scale, path = italic_path)
-        fonts['Bold'][char] = CharInfo(width = (bw + add_width) * scale, height = bh * scale, path = bold_path)
-        fonts['Bold Italic'][char] = CharInfo(width = (biw + add_width) * scale, height = bih * scale, path = bold_italic_path)
-    mw, mh = (5, 8)
-    missing = Bitmap((mw, mh))
-    for y in range(mh):
-        for x in range(mw):
-            if x == 0 or y == 0 or x == mw - 1 or y == mh - 1:
-                missing.set_at((x, y), True)
-    add_bitmap_glyph('.notdef', missing, 8, 8)
-    for provider in providers:
-        if provider['type'] == 'space':
-            for char, width in provider['advances'].items():
-                if char in seen_chars:
-                    continue
-                seen_chars.add(char)
-                fonts['Regular'][char] = CharInfo(width = width * pixel_scale, height = 0, path = None)
-                fonts['Italic'][char] = CharInfo(width = width * pixel_scale, height = 0, path = None)
-                fonts['Bold'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, path = None)
-                fonts['Bold Italic'][char] = CharInfo(width = (width + 1) * pixel_scale, height = 0, path = None)
-        elif provider['type'] == 'bitmap':
-            (img, date) = read_image(jar, provider['file'])
-            modified_date = max(modified_date, date)
-            height = provider.get('height', 8)
-            ascent = provider['ascent']
-            glyph_width = img.width // len(provider['chars'][0])
-            glyph_height = img.height // len(provider['chars'])
-            for y, row in enumerate(provider['chars']):
-                for x, char in enumerate(row):
-                    if char == '\u0000':
-                        continue
-                    if char in seen_chars:
-                        continue
-                    glyph = img.crop((x * glyph_width, y * glyph_height, (x + 1) * glyph_width, (y + 1) * glyph_height)).convert('RGBA')
-                    mask = bitmap_from_image(glyph)
-                    add_bitmap_glyph(char, mask, height, ascent)
-    for style, data in fonts.items():
+def vanilla_try_font(
+    identifier: VANILLA_FONT_ID,
+    version: MinecraftVersion,
+    store: Storage,
+    options: GeneratorOptions,
+    aglfn: dict[str, str],
+):
+    times = ModifiedTimes()
+    provider_list = get_providers(version, store, identifier, options.provider, times)
+    if provider_list is None:
+        print(f'No providers found for {identifier}')
+        return
+    name, created_date = default_font_info(identifier)
+    print(f'Converting {name}')
+    family = create_font_family(provider_list, version.providers != ProviderSupport.NONE, options.styles)
+    print_family_info(family)
+    assert times.newest is not None
+    for style, font in family.fonts.items():
         full_name = 'Minecraft ' + name
-        ttf_name = full_name.replace(' ', '') + '-' + style.replace(' ', '')
-        info = FontInfo(
-            name = full_name,
-            style = style,
-            copyright = 'Copyright (c) 2009 Mojang AB',
-            sample = 'and the universe said I love you',
-            em = font_em,
-            created = created_date,
-            modified = modified_date,
-            version = 'Version 1.000'
-        )
-        positions = FontPositions(
-           ascent = 9 / 12,
-           descent = 2 / 12,
-           sCapHeight = 7 / 12,
-           sxHeight = 5 / 12,
-           yStrikeoutPosition = 4 / 12,
-           yStrikeoutSize = 1 / 12,
-           underlinePosition = -1 / 12,
-           underlineThickness = 1 / 12,
-           italicAngle = -14.05598
-        )
-        font = make_font(info, positions, data, aglfn)
-        dest = pathlib.Path('out') / f'{ttf_name}.ttf'
+        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, created_date, times.newest, aglfn)
+        ttf_name = full_name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
+        dest = options.output / f'{ttf_name}.ttf'
         dest.parent.mkdir(parents=True, exist_ok=True)
-        font.save(dest)
+        ttf.save(dest)
+
+def main_vanilla_history(version_range: tuple[str | None, str | None], identifiers: set[VANILLA_FONT_ID], options: GeneratorOptions, cache: pathlib.Path):
+    manifest = get_manifest(cache)
+    aglfn = get_aglfn(cache)
+    start, end = version_range
+    unique_chars: dict[VANILLA_FONT_ID, list[dict[str, GlyphInfo]]] = {}
+    reached_start = start is None
+    for version_data in reversed(manifest['versions']):
+        if not reached_start and start is not None and version_data['id'] == start:
+            reached_start = True
+        if not reached_start:
+            continue
+        info = version_from_data(version_data, cache)
+        if info is None:
+            continue
+        store = StackStorage([info.jar_storage, info.asset_storage])
+        for identifier in identifiers:
+            times = ModifiedTimes()
+            provider_list = get_providers(info.version, store, identifier, options.provider, times)
+            if provider_list is None:
+                continue
+            name, created_date = default_font_info(identifier)
+            assert times.newest is not None
+            family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, options.styles)
+            if len(family.fonts) > 0:
+                font = next(iter(family.fonts.values()))
+                if identifier not in unique_chars:
+                    report = GlyphChangeReport(list(font.chars.keys()), [], [])
+                    unique_chars[identifier] = []
+                else:
+                    report = different_glyphs(unique_chars[identifier][-1], font.chars)
+                if len(report.added) > 0 or len(report.removed) > 0 or len(report.changed) > 0:
+                    unique_chars[identifier].append(font.chars)
+                    print(f'{version_data['id']} ({info.version.name}): {identifier} changed')
+                    if len(report.added) > 0:
+                        print(f'\tadded {report_characters(report.added)}')
+                    if len(report.removed) > 0:
+                        print(f'\tremoved {report_characters(report.removed)}')
+                    if len(report.changed) > 0:
+                        print(f'\tchanged {report_characters(report.changed)}')
+                    for style, font in family.fonts.items():
+                        full_name = 'Minecraft ' + name
+                        ttf = finalize_font(full_name, style, font.chars, font.other_glyphs, family.font_em, created_date, times.newest, aglfn)
+                        dest = options.output / identifier.split(':')[1] / f'{len(unique_chars[identifier]):03d}-{version_data['id']}-{style}.ttf'
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        ttf.save(dest)
+        if end is not None and version_data['id'] == end:
+            break
+
+def report_characters(chars: list[str]) -> str:
+    if len(chars) > 60:
+        return f'{len(chars)} characters'
+    return f'{len(chars)} characters ({''.join(chars)!r})'
+
+@dataclasses.dataclass
+class GlyphChangeReport:
+    added: list[str]
+    removed: list[str]
+    changed: list[str]
+
+def different_glyphs(old: dict[str, GlyphInfo], new: dict[str, GlyphInfo]) -> GlyphChangeReport:
+    added = [x for x in new if x not in old]
+    removed = [x for x in old if x not in new]
+    changed: list[str] = []
+    for char in [x for x in old if x in new]:
+        old_glyph = old[char]
+        new_glyph = new[char]
+        if old_glyph != new_glyph:
+            changed.append(char)
+    return GlyphChangeReport(added, removed, changed)
+
+def main_pack_list(version_id: str, location: pathlib.Path, cache: pathlib.Path):
+    pack_storage = get_storage(location)
+    if pack_storage is None:
+        print(f'No resource pack at {location}')
+        return
+    info = jar_info(version_id, cache)
+    if info is None:
+        return
+    print(f'Available font identifiers in resource pack {location.name} on Minecraft {info.manifest['id']}:')
+    store = StackStorage([info.jar_storage, info.asset_storage, pack_storage])
+    identifiers = available_identifiers(info.version, store)
+    for identifier in identifiers:
+        print(identifier)
+
+def available_identifiers(version: MinecraftVersion, store: Storage) -> list[str]:
+    if version.providers != ProviderSupport.NONE:
+        identifiers: list[str] = []
+        assets = store.get_entries(pathlib.PurePath('assets'))
+        for asset in assets:
+            parts = asset.parts
+            if len(parts) > 3 and parts[2] == 'font' and asset.suffix == '.json':
+                namespace = parts[1]
+                body = list(parts[3:])
+                body[-1] = asset.stem
+                identifier = namespace + ':' + '/'.join(body)
+                identifiers.append(identifier)
+        return identifiers
+    else:
+        assert version.entry_map is not None
+        return list(version.entry_map.keys())
+
+def main_pack_generate(version_id: str, location: pathlib.Path, identifier: str, name: str, options: GeneratorOptions, cache: pathlib.Path):
+    pack_storage = get_storage(location)
+    if pack_storage is None:
+        print(f'No resource pack at {location}')
+        return
+    info = jar_info(version_id, cache)
+    if info is None:
+        return
+    aglfn = get_aglfn(cache)
+    print(f'Converting font {identifier} from resource pack {location.name} on Minecraft {info.manifest['id']}')
+    store = StackStorage([info.jar_storage, info.asset_storage, pack_storage])
+    times = ModifiedTimes()
+    provider_list = get_providers(info.version, store, identifier, options.provider, times)
+    if provider_list is None:
+        print(f'No font with ID {identifier} in jar or resource pack')
+        return
+    family = create_font_family(provider_list, info.version.providers != ProviderSupport.NONE, options.styles)
+    print_family_info(family)
+    assert times.oldest is not None
+    assert times.newest is not None
+    for style, font in family.fonts.items():
+        ttf = finalize_font(name, style, font.chars, font.other_glyphs, family.font_em, times.oldest, times.newest, aglfn)
+        ttf_name = name.replace(' ', '') + '-' + style_info(style)[0].replace(' ', '')
+        dest = options.output / f'{ttf_name}.ttf'
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ttf.save(dest)
+
+def print_family_info(family: FontFamilyInfo):
+    if len(family.colored) > 0:
+        print(f'\t{report_characters(family.colored)} have color')
+    point_sizes: dict[int, list[str]] = {}
+    for (num, denom), chars in family.scales.items():
+        top = num * 12
+        gcd = math.gcd(top, denom)
+        point_size = top // gcd
+        if point_size not in point_sizes:
+            point_sizes[point_size] = []
+        point_sizes[point_size].extend(chars)
+    for point, chars in point_sizes.items():
+        print(f'\t{report_characters(chars)} will look pixel-perfect at font size multiples of {point}px')
+    lcm = math.lcm(*point_sizes.keys())
+    print(f'\tAll characters in this font will look pixel-perfect at font size multiples of {lcm}px')
+
+def image_has_color(image: PIL.Image.Image) -> bool:
+    # sometimes there are multiple fully transparent colors, so look for more than just 2
+    colors = image.getcolors(maxcolors = 5)
+    if colors is None or len(colors) >= 5:
+        return True
+    palette = image.getpalette()
+    transparent_index = image.info.get('transparency')
+    for _count, color in colors:
+        if image.mode == 'P':
+            assert palette is not None
+            assert isinstance(color, int)
+            r, g, b, a = get_palette_rgba(palette, transparent_index, color)
+        elif image.mode == 'RGB':
+            assert isinstance(color, tuple)
+            r, g, b = color
+            a = 255
+        elif image.mode == 'RGBA':
+            assert isinstance(color, tuple)
+            r, g, b, a = color
+        else:
+            raise ValueError(image.mode)
+        if a != 0 and not (r == 255 and g == 255 and b == 255):
+            return True
+    return False
 
 if __name__ == '__main__':
     main()
