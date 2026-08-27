@@ -35,5 +35,6 @@ struct LauncherAssets {
 #[derive(Debug, serde::Deserialize)]
 struct LauncherData {
     downloads: LauncherDownloads,
-    assetIndex: LauncherAssets,
+    #[serde(rename = "assetIndex")]
+    asset_index: LauncherAssets,
 }

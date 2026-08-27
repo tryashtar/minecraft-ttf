@@ -1,9 +1,13 @@
-use std::{fmt::Display, ops::RangeInclusive, path::PathBuf, str::FromStr};
+use std::{
+    fmt::Display, fmt::Write, ops::RangeInclusive, path::PathBuf, process::ExitCode, str::FromStr,
+};
 
-use crate::font::Style;
+use crate::{font::Style, versions::VanillaFontId};
 
 mod cache;
 mod font;
+mod storage;
+mod versions;
 
 #[derive(clap::Parser, Debug)]
 struct Cli {
@@ -41,6 +45,8 @@ enum PackCommand {
 struct VanillaGenerateArgs {
     /// Name of the Minecraft version to download, or "latest"
     version: String,
+    #[arg(long, value_delimiter=',', default_values_t = [VanillaFontId::Default])]
+    identifiers: Vec<VanillaFontId>,
     #[command(flatten)]
     generate_args: GenerateArgs,
     #[command(flatten)]
@@ -49,6 +55,12 @@ struct VanillaGenerateArgs {
 
 #[derive(clap::Args, Debug)]
 struct VanillaHistoryArgs {
+    /// First version to scan
+    #[arg(long)]
+    from: Option<String>,
+    /// Last version to scan
+    #[arg(long)]
+    to: Option<String>,
     #[command(flatten)]
     generate_args: GenerateArgs,
     #[command(flatten)]
@@ -228,7 +240,7 @@ struct PackArgs {
 #[derive(clap::Args, Debug)]
 struct GenerateArgs {
     /// Styles to generate
-    #[arg(long, default_values_t = [Style::Regular])]
+    #[arg(long, value_delimiter=',', default_values_t = [Style::Regular])]
     styles: Vec<Style>,
     /// When to include color for characters that come from images (auto = only if any part of the image is not solid white)
     #[arg(long, default_value_t = ColorMode::Auto)]
@@ -250,6 +262,52 @@ struct GenerateArgs {
     output: PathBuf,
 }
 
-fn main() {
+fn main() -> ExitCode {
     let cli = <Cli as clap::Parser>::parse();
+    let result = run(cli.command);
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Fatal: {}", report(&err));
+            ExitCode::FAILURE
+        }
+    }
 }
+
+fn report(mut err: &dyn std::error::Error) -> String {
+    let mut s = format!("{err}");
+    while let Some(src) = err.source() {
+        _ = write!(s, "\nCaused by: {src}");
+        err = src;
+    }
+    s
+}
+
+#[derive(thiserror::Error, Debug)]
+enum CommandError {}
+
+fn run(command: Command) -> Result<(), CommandError> {
+    match command {
+        Command::Vanilla(VanillaCommand::Generate(args)) => {
+            vanilla_generate(args);
+        }
+        Command::Vanilla(VanillaCommand::History(args)) => {
+            vanilla_history(args);
+        }
+        Command::Pack(PackCommand::Generate(args)) => {
+            pack_generate(args);
+        }
+        Command::Pack(PackCommand::List(args)) => {
+            pack_list(args);
+        }
+    }
+    Ok(())
+}
+
+fn vanilla_generate(args: VanillaGenerateArgs) {}
+
+fn vanilla_history(args: VanillaHistoryArgs) {}
+
+fn pack_generate(args: PackGenerateArgs) {}
+
+fn pack_list(args: PackListArgs) {}
