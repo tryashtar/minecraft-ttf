@@ -5,4 +5,9 @@ edition = "2024"
 
 [dependencies]
 bitmap-ttf = { path = "../bitmap-ttf"}
-image = "0.25.10"
+clap = { version = "4.6", features = ["derive"] }
+image = "0.25"
+reqwest = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+url = { version = "2.5", features = ["serde"] }

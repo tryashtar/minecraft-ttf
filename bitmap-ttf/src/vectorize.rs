@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use petgraph::{Directed, Graph, algo::tarjan_scc, graph::NodeIndex};
 
@@ -37,13 +37,22 @@ pub fn bitmap_to_graph(bitmap: &Bitmap) -> Graph<(usize, usize), (), Directed> {
     graph
 }
 
-pub fn trace<A, B>(graph: &Graph<A, B, Directed>) -> Vec<Vec<&A>> {
+fn swap_pair<A, B>(tuple: (A, B)) -> (B, A) {
+    let (a, b) = tuple;
+    (b, a)
+}
+
+pub fn trace(graph: &Graph<(usize, usize), (), Directed>) -> Vec<VecDeque<(usize, usize)>> {
     let components = tarjan_scc(graph);
     let mut result = vec![];
     for component in components {
         let mut adjacencies = adjacencies(graph, &component);
-        let circuit = hierholzer_euler_circuit(&mut adjacencies, component[0]);
-        let points = circuit.into_iter().map(|x| &graph[x]).collect::<Vec<_>>();
+        let start_node = component
+            .iter()
+            .min_by_key(|x| swap_pair(graph[**x]))
+            .unwrap();
+        let circuit = hierholzer_euler_circuit(&mut adjacencies, *start_node);
+        let points = circuit.into_iter().map(|x| graph[x]).collect();
         result.push(points);
     }
     result
@@ -67,8 +76,8 @@ fn adjacencies<A, B>(
 fn hierholzer_euler_circuit(
     adjacencies: &mut HashMap<NodeIndex, HashSet<NodeIndex>>,
     start_node: NodeIndex,
-) -> Vec<NodeIndex> {
-    let mut circuit = Vec::new();
+) -> VecDeque<NodeIndex> {
+    let mut circuit = VecDeque::new();
     let mut stack = vec![start_node];
     let mut current = start_node;
     while !stack.is_empty() {
@@ -82,10 +91,9 @@ fn hierholzer_euler_circuit(
             adjacencies.get_mut(&neighbor).unwrap().remove(&current);
             current = neighbor;
         } else {
-            circuit.push(current);
+            circuit.push_front(current);
             current = stack.pop().unwrap();
         }
     }
-    circuit.reverse();
     circuit
 }
