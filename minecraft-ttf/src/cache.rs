@@ -153,6 +153,7 @@ fn read_or_download_json<T: serde::de::DeserializeOwned>(
     Ok(result)
 }
 
+#[derive(Debug)]
 pub struct AssetStorage {
     assets: AssetSource,
     prefix: PathBuf,
@@ -178,10 +179,7 @@ impl storage::Storage for AssetStorage {
             return Err(storage::StorageError::PathConversion);
         };
         let Some(data) = self.assets.objects.get(name) else {
-            return Err(storage::StorageError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "",
-            )));
+            return Err(storage::StorageError::FileNotFound);
         };
         let hash = &data.hash;
         let mut cached = self.cache.join("assets/objects");

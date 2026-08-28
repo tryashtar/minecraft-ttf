@@ -1464,6 +1464,7 @@ dependencies = [
  "bitmap-ttf",
  "clap",
  "image",
+ "indexmap",
  "jiff",
  "ndarray",
  "reqwest",

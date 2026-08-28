@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Display, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    path::PathBuf,
+};
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub enum VanillaFontId {
@@ -56,4 +60,154 @@ pub enum ProviderSupport {
         textures: HashMap<VanillaFontId, Option<PathBuf>>,
         unifont: Option<LegacyUnifont>,
     },
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum VersionError {
+    #[error(transparent)]
+    Zip(#[from] zip::result::ZipError),
+    #[error(transparent)]
+    Serde(#[from] serde_json::Error),
+    #[error("Unknown version")]
+    UnknownVersion,
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(untagged)]
+pub enum PackVersion {
+    Int(u32),
+    Split { resource: u32 },
+    Modern { resource_major: u32 },
+}
+
+impl PackVersion {
+    fn as_int(&self) -> u32 {
+        match self {
+            Self::Int(val) => *val,
+            Self::Split { resource } => *resource,
+            Self::Modern { resource_major } => *resource_major,
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+pub struct VersionJson {
+    pack_version: Option<PackVersion>,
+    world_version: Option<u32>,
+}
+
+pub fn detect_version(
+    jar: &mut zip::ZipArchive<impl std::io::Read + std::io::Seek>,
+) -> Result<MinecraftVersion, VersionError> {
+    let version_json: VersionJson = match jar.by_name("version.json") {
+        Ok(file) => serde_json::from_reader(file)?,
+        Err(zip::result::ZipError::FileNotFound) => VersionJson::default(),
+        Err(e) => return Err(VersionError::Zip(e)),
+    };
+    if version_json
+        .pack_version
+        .as_ref()
+        .is_some_and(|x| x.as_int() >= 89)
+    {
+        return Ok(MinecraftVersion {
+            name: String::from("26.3-snapshot-1+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::Filter,
+            },
+            uneven_unifont: true,
+            hardcoded_spaces: None,
+        });
+    }
+    if version_json
+        .pack_version
+        .as_ref()
+        .is_some_and(|x| x.as_int() >= 88)
+        && version_json.world_version.is_some_and(|x| x >= 4896)
+    {
+        return Ok(MinecraftVersion {
+            name: String::from("26.2-pre-3+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::Filter,
+            },
+            uneven_unifont: false,
+            hardcoded_spaces: None,
+        });
+    }
+    if version_json
+        .pack_version
+        .as_ref()
+        .is_some_and(|x| x.as_int() >= 26)
+    {
+        return Ok(MinecraftVersion {
+            name: String::from("24w06a+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::Filter,
+            },
+            uneven_unifont: true,
+            hardcoded_spaces: None,
+        });
+    }
+    if version_json
+        .pack_version
+        .as_ref()
+        .is_some_and(|x| x.as_int() >= 9)
+    {
+        return Ok(MinecraftVersion {
+            name: String::from("22w11a+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::SwitchIdentifier,
+            },
+            uneven_unifont: true,
+            hardcoded_spaces: None,
+        });
+    }
+    if version_json
+        .pack_version
+        .as_ref()
+        .is_some_and(|x| x.as_int() >= 8)
+        && version_json.world_version.is_some_and(|x| x >= 2966)
+    {
+        return Ok(MinecraftVersion {
+            name: String::from("22w03a+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::SwitchIdentifier,
+            },
+            uneven_unifont: true,
+            hardcoded_spaces: Some(HashMap::from([(' ', 4.0), ('\u{200c}', 0.0)])),
+        });
+    }
+    if version_json
+        .pack_version
+        .as_ref()
+        .is_some_and(|x| x.as_int() >= 5)
+        && version_json.world_version.is_some_and(|x| x >= 2529)
+    {
+        return Ok(MinecraftVersion {
+            name: String::from("20w17a+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::SwitchIdentifier,
+            },
+            uneven_unifont: true,
+            hardcoded_spaces: Some(HashMap::from([(' ', 4.0)])),
+        });
+    }
+    let names = jar.file_names().collect::<HashSet<_>>();
+    if names.contains("assets/minecraft/font/default.json") {
+        return Ok(MinecraftVersion {
+            name: String::from("1.13-pre7+"),
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Supported {
+                uniform: ForceUniformBehavior::SkipBitmaps,
+            },
+            uneven_unifont: true,
+            hardcoded_spaces: Some(HashMap::from([(' ', 4.0)])),
+        });
+    }
+    Err(VersionError::UnknownVersion)
 }

@@ -14,6 +14,8 @@ pub trait Storage {
 
 #[derive(thiserror::Error, Debug)]
 pub enum StorageError {
+    #[error("file not found")]
+    FileNotFound,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -30,6 +32,7 @@ pub enum StorageError {
     Cache(#[from] cache::CacheError),
 }
 
+#[derive(Debug)]
 pub struct FilesystemStorage {
     root: PathBuf,
 }
@@ -51,20 +54,31 @@ impl Storage for FilesystemStorage {
 
     fn read(&mut self, entry: &Path) -> Result<Vec<u8>, StorageError> {
         let path = self.root.join(entry);
-        Ok(std::fs::read(&path)?)
+        let result = std::fs::read(&path);
+        match result {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::FileNotFound),
+            other => Ok(other?),
+        }
     }
 
     fn modified_time(&mut self, entry: &Path) -> Result<Option<jiff::Timestamp>, StorageError> {
         let path = self.root.join(entry);
-        let metadata = std::fs::metadata(path)?;
-        let Ok(modified) = metadata.modified() else {
-            return Ok(None);
-        };
-        let timestamp = jiff::Timestamp::try_from(modified)?;
-        Ok(Some(timestamp))
+        let metadata = std::fs::metadata(path);
+        match metadata {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::FileNotFound),
+            Err(e) => Err(StorageError::Io(e)),
+            Ok(metadata) => {
+                let Ok(modified) = metadata.modified() else {
+                    return Ok(None);
+                };
+                let timestamp = jiff::Timestamp::try_from(modified)?;
+                Ok(Some(timestamp))
+            }
+        }
     }
 }
 
+#[derive(Debug)]
 pub struct ZipStorage {
     zip: zip::ZipArchive<std::fs::File>,
 }
@@ -85,23 +99,35 @@ impl Storage for ZipStorage {
         let Some(name) = entry.as_os_str().to_str() else {
             return Err(StorageError::PathConversion);
         };
-        let mut file = self.zip.by_name(name)?;
-        let mut bytes = vec![];
-        file.read_to_end(&mut bytes)?;
-        Ok(bytes)
+        let file = self.zip.by_name(name);
+        match file {
+            Err(zip::result::ZipError::FileNotFound) => Err(StorageError::FileNotFound),
+            Err(e) => Err(StorageError::Zip(e)),
+            Ok(mut file) => {
+                let mut bytes = vec![];
+                file.read_to_end(&mut bytes)?;
+                Ok(bytes)
+            }
+        }
     }
 
     fn modified_time(&mut self, entry: &Path) -> Result<Option<jiff::Timestamp>, StorageError> {
         let Some(name) = entry.as_os_str().to_str() else {
             return Err(StorageError::PathConversion);
         };
-        let file = self.zip.by_name(name)?;
-        let Some(modified) = file.last_modified() else {
-            return Ok(None);
-        };
-        let civil = jiff::civil::DateTime::try_from(modified)?;
-        let zoned = civil.to_zoned(jiff::tz::TimeZone::system())?;
-        Ok(Some(zoned.timestamp()))
+        let file = self.zip.by_name(name);
+        match file {
+            Err(zip::result::ZipError::FileNotFound) => Err(StorageError::FileNotFound),
+            Err(e) => Err(StorageError::Zip(e)),
+            Ok(file) => {
+                let Some(modified) = file.last_modified() else {
+                    return Ok(None);
+                };
+                let civil = jiff::civil::DateTime::try_from(modified)?;
+                let zoned = civil.to_zoned(jiff::tz::TimeZone::system())?;
+                Ok(Some(zoned.timestamp()))
+            }
+        }
     }
 }
 
@@ -114,7 +140,7 @@ fn stack_first<T>(
     for sub in storage.0.iter_mut() {
         let result = callback(Box::as_mut(sub));
         match result {
-            Err(StorageError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(StorageError::FileNotFound) => {
                 continue;
             }
             _ => {
@@ -122,10 +148,7 @@ fn stack_first<T>(
             }
         }
     }
-    Err(StorageError::Io(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "",
-    )))
+    Err(StorageError::FileNotFound)
 }
 
 impl Storage for StackStorage {

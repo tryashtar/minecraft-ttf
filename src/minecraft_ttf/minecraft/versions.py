@@ -143,6 +143,7 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             uneven_unifont = True,
             entry_map = None,
         )
+    simple_spaces = {' ': 4.0}
     if rp is not None and rp >= 5 and world_version is not None and world_version >= 2529:
         return MinecraftVersion(
             name = '20w17a+',
@@ -150,13 +151,12 @@ def detect_version(jar: zipfile.ZipFile) -> MinecraftVersion | None:
             providers = ProviderSupport.SWITCH_FONT_WHEN_FORCED,
             hardcoded_chars = None,
             lookup_chars = None,
-            hardcoded_spaces = {' ': 4.0, '\u200c': 0.0},
+            hardcoded_spaces = simple_spaces,
             hardcoded_sizes = None,
             hardcoded_unifont = None,
             uneven_unifont = True,
             entry_map = None,
         )
-    simple_spaces = {' ': 4.0}
     if 'assets/minecraft/font/default.json' in names:
         return MinecraftVersion(
             name = '1.13-pre7+',

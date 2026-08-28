@@ -7,6 +7,7 @@ pub enum Style {
     Italic,
     BoldItalic,
 }
+
 impl Display for Style {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
