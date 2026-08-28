@@ -13,6 +13,7 @@ use crate::{font::Style, versions::VanillaFontId};
 
 mod cache;
 mod font;
+mod providers;
 mod storage;
 mod versions;
 
@@ -330,6 +331,9 @@ fn load_jar(version: &str, cache: &Path) -> Result<JarInfo, CommandError> {
     let version = manifest
         .find_version(version_id)
         .ok_or(CommandError::UnknownVersion)?;
+    let launcher_data = cache::get_launcher(version, cache)?;
+    let assets = cache::get_asset_source(&launcher_data.asset_index, cache)?;
+    let jar = cache::get_jar(&launcher_data, cache)?;
     Ok(JarInfo {})
 }
 
