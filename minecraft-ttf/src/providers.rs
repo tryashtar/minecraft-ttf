@@ -1,38 +1,46 @@
-use std::{collections::HashMap, fmt::Display, path::PathBuf, str::FromStr};
+use std::{
+    cmp::{max, min},
+    collections::HashMap,
+    fmt::Display,
+    path::PathBuf,
+    str::FromStr,
+};
 
-use bitmap_ttf::bitmap::Bitmap;
+use bitmap_ttf::bitmap::{Bitmap, Rectangle};
+
+use crate::storage;
 
 #[derive(Debug)]
 pub struct CharBitmap {
-    bitmap: Bitmap,
-    advance: f32,
-    bold_offset: f32,
+    pub bitmap: Bitmap,
+    pub advance: f32,
+    pub bold_offset: f32,
 }
 
 #[derive(Debug)]
 pub struct BitmapProvider {
-    height: i32,
-    ascent: i32,
-    chars: indexmap::IndexMap<char, CharBitmap>,
+    pub height: i32,
+    pub ascent: i32,
+    pub chars: indexmap::IndexMap<char, CharBitmap>,
 }
 
 pub struct CharImage {
-    image: image::SubImage<()>,
-    bitmap: Bitmap,
-    advance: f32,
-    bold_offset: f32,
+    pub content_box: Rectangle,
+    pub bitmap: Bitmap,
+    pub advance: f32,
+    pub bold_offset: f32,
 }
 
 pub struct ImageProvider {
-    height: i32,
-    ascent: i32,
-    has_color: bool,
-    chars: indexmap::IndexMap<char, CharImage>,
+    pub image: image::DynamicImage,
+    pub height: i32,
+    pub ascent: i32,
+    pub chars: indexmap::IndexMap<char, CharImage>,
 }
 
 #[derive(Debug)]
 pub struct SpaceProvider {
-    chars: HashMap<char, f32>,
+    pub chars: HashMap<char, f32>,
 }
 
 pub enum Provider {
@@ -43,13 +51,17 @@ pub enum Provider {
 
 #[derive(Debug, Clone)]
 pub struct Identifier {
-    namespace: String,
-    body: PathBuf,
+    pub namespace: String,
+    pub body: PathBuf,
 }
 
 impl Identifier {
     pub fn new(namespace: String, body: PathBuf) -> Self {
         Self { namespace, body }
+    }
+
+    pub fn vanilla(body: PathBuf) -> Self {
+        Self::new(String::from("minecraft"), body)
     }
 }
 
@@ -124,4 +136,98 @@ impl Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.namespace, self.body.display())
     }
+}
+
+#[derive(Debug, Default)]
+pub struct ModifiedTimes {
+    oldest: Option<jiff::Timestamp>,
+    newest: Option<jiff::Timestamp>,
+}
+
+impl ModifiedTimes {
+    pub fn update(&mut self, time: Option<jiff::Timestamp>) {
+        if let Some(time) = time {
+            self.oldest = Some(match self.oldest {
+                None => time,
+                Some(before) => min(before, time),
+            });
+            self.newest = Some(match self.newest {
+                None => time,
+                Some(before) => max(before, time),
+            });
+        }
+    }
+}
+
+pub struct Providers {
+    pub providers: Vec<Provider>,
+    pub times: ModifiedTimes,
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("Strings were not all the same length")]
+pub struct JaggedArrayError;
+
+pub fn split_grid<'a>(
+    rows: impl Iterator<Item = &'a String>,
+    filter_nul: bool,
+) -> Result<ndarray::Array2<Option<char>>, JaggedArrayError> {
+    let map = |x: char| match (x, filter_nul) {
+        ('\u{0000}', true) => None,
+        (char, _) => Some(char),
+    };
+    let chars: Vec<Vec<Option<char>>> = rows.map(|s| s.chars().map(map).collect()).collect();
+    if chars.is_empty() {
+        return Ok(ndarray::Array2::default((0, 0)));
+    }
+    let rows = chars.len();
+    let columns = chars[0].len();
+    if chars.iter().any(|x| x.len() != columns) {
+        return Err(JaggedArrayError);
+    }
+    let array = ndarray::Array2::from_shape_fn((rows, columns), |(i, j)| chars[i][j]);
+    Ok(array)
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProvidersError {
+    #[error(transparent)]
+    Storage(#[from] storage::StorageError),
+    #[error(transparent)]
+    Jagged(#[from] JaggedArrayError),
+}
+
+pub fn image_grid(
+    image: image::DynamicImage,
+    chars: ndarray::Array2<Option<char>>,
+    sizes: Option<HashMap<char, (u32, u32)>>,
+    include: impl Fn(char) -> bool,
+) -> indexmap::IndexMap<char, CharBitmap> {
+    let mut map = indexmap::IndexMap::new();
+    let glyph_width = image.width() / (chars.ncols() as u32);
+    let glyph_height = image.height() / (chars.nrows() as u32);
+    for ((row, col), char) in chars.indexed_iter() {
+        let Some(char) = char else {
+            continue;
+        };
+        if map.contains_key(char) || !include(*char) {
+            continue;
+        }
+        let left = col * (glyph_width as usize);
+        let top = row * (glyph_height as usize);
+        let glyph_box = Rectangle {
+            left,
+            top,
+            width: glyph_width as usize,
+            height: glyph_height as usize,
+        };
+        let glyph = image::GenericImageView::view(
+            &image,
+            left as u32,
+            top as u32,
+            glyph_width,
+            glyph_height,
+        );
+    }
+    map
 }

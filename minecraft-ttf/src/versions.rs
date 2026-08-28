@@ -1,12 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
-use crate::{providers, storage};
+use crate::{
+    providers::{self, split_grid},
+    storage,
+};
 
-#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum VanillaFontId {
     Default,
     Alt,
@@ -14,21 +17,28 @@ pub enum VanillaFontId {
     Uniform,
 }
 
-impl VanillaFontId {
-    pub fn identifier(self) -> providers::Identifier {
-        match self {
-            VanillaFontId::Default => {
-                providers::Identifier::new(String::from("minecraft"), PathBuf::from("default"))
-            }
-            VanillaFontId::Alt => {
-                providers::Identifier::new(String::from("minecraft"), PathBuf::from("alt"))
-            }
-            VanillaFontId::Illageralt => {
-                providers::Identifier::new(String::from("minecraft"), PathBuf::from("illageralt"))
-            }
-            VanillaFontId::Uniform => {
-                providers::Identifier::new(String::from("minecraft"), PathBuf::from("uniform"))
-            }
+impl TryFrom<&providers::Identifier> for VanillaFontId {
+    type Error = ();
+
+    fn try_from(value: &providers::Identifier) -> Result<Self, Self::Error> {
+        let providers::Identifier { namespace, body } = value;
+        match (namespace.as_str(), body) {
+            ("minecraft", path) if path == Path::new("default") => Ok(Self::Default),
+            ("minecraft", path) if path == Path::new("alt") => Ok(Self::Alt),
+            ("minecraft", path) if path == Path::new("illageralt") => Ok(Self::Illageralt),
+            ("minecraft", path) if path == Path::new("uniform") => Ok(Self::Uniform),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<VanillaFontId> for providers::Identifier {
+    fn from(value: VanillaFontId) -> Self {
+        match value {
+            VanillaFontId::Default => Self::vanilla(PathBuf::from("default")),
+            VanillaFontId::Alt => Self::vanilla(PathBuf::from("alt")),
+            VanillaFontId::Illageralt => Self::vanilla(PathBuf::from("illageralt")),
+            VanillaFontId::Uniform => Self::vanilla(PathBuf::from("uniform")),
         }
     }
 }
@@ -67,19 +77,20 @@ pub struct LegacyUnifont {
 }
 
 #[derive(Debug)]
+pub enum CharSource {
+    FromFile(PathBuf),
+    Hardcoded(ndarray::Array2<Option<char>>),
+}
+
+#[derive(Debug)]
 pub enum ProviderSupport {
     Supported {
         uniform: ForceUniformBehavior,
     },
-    HardcodedChars {
-        chars: ndarray::Array2<Option<char>>,
+    Hardcoded {
+        chars: CharSource,
         textures: HashMap<VanillaFontId, Option<PathBuf>>,
         hardcoded_sizes: Option<HashMap<char, f32>>,
-        unifont: Option<LegacyUnifont>,
-    },
-    FileChars {
-        path: PathBuf,
-        textures: HashMap<VanillaFontId, Option<PathBuf>>,
         unifont: Option<LegacyUnifont>,
     },
 }
@@ -238,6 +249,45 @@ pub fn get_providers(
     version: &MinecraftVersion,
     store: &mut impl storage::Storage,
     identifier: &providers::Identifier,
-) -> Vec<providers::Provider> {
-    vec![]
+) -> Result<Option<providers::Providers>, providers::ProvidersError> {
+    let mut providers = vec![];
+    let mut times = providers::ModifiedTimes::default();
+    match &version.providers {
+        ProviderSupport::Supported { uniform } => {}
+        ProviderSupport::Hardcoded {
+            chars,
+            textures,
+            hardcoded_sizes,
+            unifont,
+        } => {
+            let Ok(vanilla) = TryInto::<VanillaFontId>::try_into(identifier) else {
+                return Ok(None);
+            };
+            let Some(texture) = textures.get(&vanilla) else {
+                return Ok(None);
+            };
+            if let Some(texture) = texture {
+                let image = storage::read_image(store, texture)?;
+                match chars {
+                    CharSource::FromFile(path) => {
+                        let lines = storage::read_font_txt(store, path)?;
+                        times.update(lines.modified_time);
+                        let content = split_grid(lines.data.iter(), false)?;
+                        let mut array = ndarray::Array2::from_elem((2, content.ncols()), None);
+                        array.append(ndarray::Axis(0), content.view()).unwrap();
+                        let blank_rows = ndarray::Array2::from_elem((5, array.ncols()), None);
+                        array.append(ndarray::Axis(0), blank_rows.view()).unwrap();
+                    }
+                    CharSource::Hardcoded(array) => {}
+                };
+            }
+        }
+    }
+    if let Some(spaces) = &version.hardcoded_spaces {
+        let provider = providers::SpaceProvider {
+            chars: spaces.clone(),
+        };
+        providers.push(providers::Provider::Space(provider));
+    }
+    Ok(Some(providers::Providers { providers, times }))
 }

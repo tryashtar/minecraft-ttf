@@ -184,13 +184,7 @@ impl storage::Storage for AssetStorage {
     }
 
     fn read(&mut self, entry: &Path) -> Result<Vec<u8>, storage::StorageError> {
-        let modified = entry.strip_prefix(&self.prefix)?;
-        let Some(name) = modified.as_os_str().to_str() else {
-            return Err(storage::StorageError::PathConversion);
-        };
-        let Some(data) = self.assets.objects.get(name) else {
-            return Err(storage::StorageError::FileNotFound);
-        };
+        let data = get_asset(self, entry)?;
         let hash = &data.hash;
         let mut cached = self.cache.join("assets/objects");
         cached.push(&hash[..2]);
@@ -205,8 +199,23 @@ impl storage::Storage for AssetStorage {
 
     fn modified_time(
         &mut self,
-        _entry: &Path,
+        entry: &Path,
     ) -> Result<Option<jiff::Timestamp>, storage::StorageError> {
+        _ = get_asset(self, entry)?;
         Ok(None)
     }
+}
+
+fn get_asset<'a>(
+    store: &'a AssetStorage,
+    entry: &Path,
+) -> Result<&'a AssetEntry, storage::StorageError> {
+    let modified = entry.strip_prefix(&store.prefix)?;
+    let Some(name) = modified.as_os_str().to_str() else {
+        return Err(storage::StorageError::PathConversion);
+    };
+    let Some(data) = store.assets.objects.get(name) else {
+        return Err(storage::StorageError::FileNotFound);
+    };
+    Ok(data)
 }

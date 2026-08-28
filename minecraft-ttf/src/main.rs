@@ -311,6 +311,10 @@ enum CommandError {
     Cache(#[from] cache::CacheError),
     #[error(transparent)]
     Version(#[from] versions::VersionError),
+    #[error(transparent)]
+    Storage(#[from] storage::StorageError),
+    #[error(transparent)]
+    Providers(#[from] providers::ProvidersError),
     #[error("No version with that name found")]
     UnknownVersion,
 }
@@ -365,8 +369,13 @@ fn vanilla_generate(args: VanillaGenerateArgs) -> Result<(), CommandError> {
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     for identifier in args.identifiers {
-        let providers =
-            versions::get_providers(&info.version, &mut stack, &identifier.identifier());
+        let providers = versions::get_providers(&info.version, &mut stack, &identifier.into())?;
+        match providers {
+            None => {
+                println!("No providers found for {0}", identifier);
+            }
+            Some(providers) => {}
+        }
     }
     Ok(())
 }

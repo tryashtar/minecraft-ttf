@@ -1,6 +1,6 @@
 use std::cmp::{max, min};
 
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct Bitmap {
     bits: bitvec::vec::BitVec,
     width: usize,
@@ -11,8 +11,8 @@ pub struct Bitmap {
 pub struct Rectangle {
     pub left: usize,
     pub top: usize,
-    pub right: usize,
-    pub bottom: usize,
+    pub width: usize,
+    pub height: usize,
 }
 
 impl Bitmap {
@@ -62,14 +62,14 @@ impl Bitmap {
                 }
             }
         }
-        if left == self.width {
+        if left == self.width || top == self.height {
             return None;
         }
         Some(Rectangle {
             left,
             top,
-            right,
-            bottom,
+            width: right - left,
+            height: bottom - top,
         })
     }
 
@@ -77,12 +77,12 @@ impl Bitmap {
         let Rectangle {
             left,
             top,
-            right,
-            bottom,
+            width,
+            height,
         } = bounds;
-        let mut result = Bitmap::new(right - left, bottom - top);
-        for y in *top..min(*bottom, self.height) {
-            for x in *left..min(*right, self.width) {
+        let mut result = Bitmap::new(*width, *height);
+        for y in *top..min(*top + *height, self.height) {
+            for x in *left..min(*left + *width, self.width) {
                 if self.get(x, y) {
                     result.set(x, y, true);
                 }

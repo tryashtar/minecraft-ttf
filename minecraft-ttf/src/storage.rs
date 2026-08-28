@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     io::Read,
     path::{Path, PathBuf},
 };
@@ -30,6 +30,10 @@ pub enum StorageError {
     Time(#[from] jiff::Error),
     #[error(transparent)]
     Cache(#[from] cache::CacheError),
+    #[error(transparent)]
+    Parse(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Image(#[from] image::ImageError),
 }
 
 #[derive(Debug)]
@@ -130,7 +134,7 @@ impl<T: std::io::Read + std::io::Seek> Storage for ZipStorage<T> {
                     return Ok(None);
                 };
                 let civil = jiff::civil::DateTime::try_from(modified)?;
-                let zoned = civil.to_zoned(jiff::tz::TimeZone::system())?;
+                let zoned = civil.to_zoned(jiff::tz::TimeZone::unknown())?;
                 Ok(Some(zoned.timestamp()))
             }
         }
@@ -174,4 +178,41 @@ impl Storage for StackStorage {
     fn modified_time(&mut self, entry: &Path) -> Result<Option<jiff::Timestamp>, StorageError> {
         stack_first(self, |x| x.modified_time(entry))
     }
+}
+
+#[derive(Debug)]
+pub struct ReadEntry<T> {
+    pub data: T,
+    pub modified_time: Option<jiff::Timestamp>,
+}
+
+pub fn read_image(
+    store: &mut impl Storage,
+    entry: &Path,
+) -> Result<ReadEntry<image::DynamicImage>, StorageError> {
+    let modified_time = store.modified_time(entry)?;
+    let data = store.read(entry)?;
+    let image = image::load_from_memory(&data)?;
+    Ok(ReadEntry {
+        data: image,
+        modified_time,
+    })
+}
+
+pub fn read_font_txt(
+    store: &mut impl Storage,
+    entry: &Path,
+) -> Result<ReadEntry<VecDeque<String>>, StorageError> {
+    let modified_time = store.modified_time(entry)?;
+    let data = store.read(entry)?;
+    let text = String::from_utf8(data)?;
+    let lines = text
+        .lines()
+        .filter(|x| !x.starts_with('#'))
+        .map(String::from)
+        .collect();
+    Ok(ReadEntry {
+        data: lines,
+        modified_time,
+    })
 }

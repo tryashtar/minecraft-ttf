@@ -4,7 +4,9 @@ use petgraph::{Directed, Graph, algo::tarjan_scc, graph::NodeIndex};
 
 use crate::bitmap::Bitmap;
 
-pub fn bitmap_to_graph(bitmap: &Bitmap) -> Graph<(usize, usize), (), Directed> {
+pub type BitmapGraph = Graph<(usize, usize), (), Directed>;
+
+pub fn bitmap_to_graph(bitmap: &Bitmap) -> BitmapGraph {
     let mut graph = Graph::new();
     let mut nodes: HashMap<(usize, usize), NodeIndex> = HashMap::new();
     let mut get_node = |graph: &mut Graph<_, _, _>, x: usize, y: usize| -> NodeIndex {
@@ -42,7 +44,7 @@ fn swap_pair<A, B>(tuple: (A, B)) -> (B, A) {
     (b, a)
 }
 
-pub fn trace(graph: &Graph<(usize, usize), (), Directed>) -> Vec<VecDeque<(usize, usize)>> {
+pub fn trace(graph: &BitmapGraph) -> Vec<VecDeque<(usize, usize)>> {
     let components = tarjan_scc(graph);
     let mut result = vec![];
     for component in components {
