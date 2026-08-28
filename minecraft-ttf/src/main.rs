@@ -1,6 +1,13 @@
 use std::{
-    fmt::Display, fmt::Write, ops::RangeInclusive, path::PathBuf, process::ExitCode, str::FromStr,
+    fmt::{Display, Write},
+    ops::RangeInclusive,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    str::FromStr,
 };
+
+use tracing::error;
+use tracing_subscriber::layer::SubscriberExt;
 
 use crate::{font::Style, versions::VanillaFontId};
 
@@ -263,15 +270,27 @@ struct GenerateArgs {
 }
 
 fn main() -> ExitCode {
+    setup_logging();
     let cli = <Cli as clap::Parser>::parse();
     let result = run(cli.command);
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Fatal: {}", report(&err));
+            error!("Fatal: {}", report(&err));
             ExitCode::FAILURE
         }
     }
+}
+
+fn setup_logging() {
+    tracing_subscriber::util::SubscriberInitExt::init(
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::filter::EnvFilter::from_default_env()
+                    .add_directive(concat!(env!("CARGO_PKG_NAME"), "=debug").parse().unwrap()),
+            )
+            .with(tracing_tree::HierarchicalLayer::new(2)),
+    );
 }
 
 fn report(mut err: &dyn std::error::Error) -> String {
@@ -284,30 +303,49 @@ fn report(mut err: &dyn std::error::Error) -> String {
 }
 
 #[derive(thiserror::Error, Debug)]
-enum CommandError {}
+enum CommandError {
+    #[error(transparent)]
+    Cache(#[from] cache::CacheError),
+    #[error("No version with that name found")]
+    UnknownVersion,
+}
 
 fn run(command: Command) -> Result<(), CommandError> {
     match command {
-        Command::Vanilla(VanillaCommand::Generate(args)) => {
-            vanilla_generate(args);
-        }
-        Command::Vanilla(VanillaCommand::History(args)) => {
-            vanilla_history(args);
-        }
-        Command::Pack(PackCommand::Generate(args)) => {
-            pack_generate(args);
-        }
-        Command::Pack(PackCommand::List(args)) => {
-            pack_list(args);
-        }
+        Command::Vanilla(VanillaCommand::Generate(args)) => vanilla_generate(args),
+        Command::Vanilla(VanillaCommand::History(args)) => vanilla_history(args),
+        Command::Pack(PackCommand::Generate(args)) => pack_generate(args),
+        Command::Pack(PackCommand::List(args)) => pack_list(args),
     }
+}
+
+struct JarInfo {}
+
+fn load_jar(version: &str, cache: &Path) -> Result<JarInfo, CommandError> {
+    let manifest = cache::get_manifest(cache)?;
+    let version_id = match version {
+        "latest" => &manifest.latest.snapshot,
+        _ => version,
+    };
+    let version = manifest
+        .find_version(version_id)
+        .ok_or(CommandError::UnknownVersion)?;
+    Ok(JarInfo {})
+}
+
+fn vanilla_generate(args: VanillaGenerateArgs) -> Result<(), CommandError> {
+    let info = load_jar(&args.version, &args.generic_args.cache)?;
     Ok(())
 }
 
-fn vanilla_generate(args: VanillaGenerateArgs) {}
+fn vanilla_history(args: VanillaHistoryArgs) -> Result<(), CommandError> {
+    Ok(())
+}
 
-fn vanilla_history(args: VanillaHistoryArgs) {}
+fn pack_generate(args: PackGenerateArgs) -> Result<(), CommandError> {
+    Ok(())
+}
 
-fn pack_generate(args: PackGenerateArgs) {}
-
-fn pack_list(args: PackListArgs) {}
+fn pack_list(args: PackListArgs) -> Result<(), CommandError> {
+    Ok(())
+}
