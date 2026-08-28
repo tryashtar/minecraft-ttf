@@ -4,12 +4,33 @@ use std::{
     path::PathBuf,
 };
 
+use crate::{providers, storage};
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub enum VanillaFontId {
     Default,
     Alt,
     Illageralt,
     Uniform,
+}
+
+impl VanillaFontId {
+    pub fn identifier(self) -> providers::Identifier {
+        match self {
+            VanillaFontId::Default => {
+                providers::Identifier::new(String::from("minecraft"), PathBuf::from("default"))
+            }
+            VanillaFontId::Alt => {
+                providers::Identifier::new(String::from("minecraft"), PathBuf::from("alt"))
+            }
+            VanillaFontId::Illageralt => {
+                providers::Identifier::new(String::from("minecraft"), PathBuf::from("illageralt"))
+            }
+            VanillaFontId::Uniform => {
+                providers::Identifier::new(String::from("minecraft"), PathBuf::from("uniform"))
+            }
+        }
+    }
 }
 
 impl Display for VanillaFontId {
@@ -23,12 +44,13 @@ impl Display for VanillaFontId {
     }
 }
 
+#[derive(Debug)]
 pub struct MinecraftVersion {
-    name: String,
-    providers: ProviderSupport,
-    hardcoded_spaces: Option<HashMap<char, f32>>,
-    uneven_unifont: bool,
-    asset_mount: PathBuf,
+    pub name: String,
+    pub providers: ProviderSupport,
+    pub hardcoded_spaces: Option<HashMap<char, f32>>,
+    pub uneven_unifont: bool,
+    pub asset_mount: PathBuf,
 }
 
 #[derive(Debug)]
@@ -210,4 +232,12 @@ pub fn detect_version(
         });
     }
     Err(VersionError::UnknownVersion)
+}
+
+pub fn get_providers(
+    version: &MinecraftVersion,
+    store: &mut impl storage::Storage,
+    identifier: &providers::Identifier,
+) -> Vec<providers::Provider> {
+    vec![]
 }

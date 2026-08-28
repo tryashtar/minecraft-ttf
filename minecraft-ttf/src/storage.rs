@@ -79,11 +79,17 @@ impl Storage for FilesystemStorage {
 }
 
 #[derive(Debug)]
-pub struct ZipStorage {
-    zip: zip::ZipArchive<std::fs::File>,
+pub struct ZipStorage<T> {
+    zip: zip::ZipArchive<T>,
 }
 
-impl Storage for ZipStorage {
+impl<T> ZipStorage<T> {
+    pub fn new(zip: zip::ZipArchive<T>) -> Self {
+        Self { zip }
+    }
+}
+
+impl<T: std::io::Read + std::io::Seek> Storage for ZipStorage<T> {
     fn get_entries(&self, prefix: &Path) -> Result<HashSet<PathBuf>, StorageError> {
         let mut result = HashSet::new();
         for name in self.zip.file_names() {
@@ -131,7 +137,7 @@ impl Storage for ZipStorage {
     }
 }
 
-pub struct StackStorage(Vec<Box<dyn Storage>>);
+pub struct StackStorage(pub Vec<Box<dyn Storage>>);
 
 fn stack_first<T>(
     storage: &mut StackStorage,

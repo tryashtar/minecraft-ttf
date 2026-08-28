@@ -103,7 +103,7 @@ pub fn get_asset_source(index: &LauncherAssets, cache: &Path) -> Result<AssetSou
 pub fn get_jar(
     launcher: &LauncherData,
     cache: &Path,
-) -> Result<zip::ZipArchive<impl std::io::Read>, CacheError> {
+) -> Result<zip::ZipArchive<impl std::io::Read + std::io::Seek + use<>>, CacheError> {
     let mut cached_path = cache.join(Path::new("versions"));
     cached_path.push(&launcher.id);
     cached_path.push(&launcher.id);
@@ -158,6 +158,16 @@ pub struct AssetStorage {
     assets: AssetSource,
     prefix: PathBuf,
     cache: PathBuf,
+}
+
+impl AssetStorage {
+    pub fn new(assets: AssetSource, prefix: PathBuf, cache: PathBuf) -> Self {
+        Self {
+            assets,
+            prefix,
+            cache,
+        }
+    }
 }
 
 impl storage::Storage for AssetStorage {

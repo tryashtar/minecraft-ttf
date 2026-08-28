@@ -9,7 +9,7 @@ use std::{
 use tracing::error;
 use tracing_subscriber::layer::SubscriberExt;
 
-use crate::{font::Style, versions::VanillaFontId};
+use crate::{cache::AssetStorage, font::Style, versions::VanillaFontId};
 
 mod cache;
 mod font;
@@ -79,6 +79,8 @@ struct VanillaHistoryArgs {
 struct PackGenerateArgs {
     #[command(flatten)]
     pack_args: PackArgs,
+    identifier: providers::Identifier,
+    name: String,
     #[command(flatten)]
     generate_args: GenerateArgs,
     #[command(flatten)]
@@ -307,6 +309,8 @@ fn report(mut err: &dyn std::error::Error) -> String {
 enum CommandError {
     #[error(transparent)]
     Cache(#[from] cache::CacheError),
+    #[error(transparent)]
+    Version(#[from] versions::VersionError),
     #[error("No version with that name found")]
     UnknownVersion,
 }
@@ -320,9 +324,18 @@ fn run(command: Command) -> Result<(), CommandError> {
     }
 }
 
-struct JarInfo {}
+#[derive(Debug)]
+struct JarInfo<T> {
+    launcher: cache::LauncherData,
+    jar_store: storage::ZipStorage<T>,
+    asset_store: cache::AssetStorage,
+    version: versions::MinecraftVersion,
+}
 
-fn load_jar(version: &str, cache: &Path) -> Result<JarInfo, CommandError> {
+fn load_jar(
+    version: &str,
+    cache: &Path,
+) -> Result<JarInfo<impl std::io::Read + std::io::Seek + use<>>, CommandError> {
     let manifest = cache::get_manifest(cache)?;
     let version_id = match version {
         "latest" => &manifest.latest.snapshot,
@@ -333,12 +346,28 @@ fn load_jar(version: &str, cache: &Path) -> Result<JarInfo, CommandError> {
         .ok_or(CommandError::UnknownVersion)?;
     let launcher_data = cache::get_launcher(version, cache)?;
     let assets = cache::get_asset_source(&launcher_data.asset_index, cache)?;
-    let jar = cache::get_jar(&launcher_data, cache)?;
-    Ok(JarInfo {})
+    let mut jar = cache::get_jar(&launcher_data, cache)?;
+    let version = versions::detect_version(&mut jar)?;
+    Ok(JarInfo {
+        launcher: launcher_data,
+        jar_store: storage::ZipStorage::new(jar),
+        asset_store: AssetStorage::new(
+            assets,
+            version.asset_mount.clone(),
+            cache.join("assets/objects"),
+        ),
+        version,
+    })
 }
 
 fn vanilla_generate(args: VanillaGenerateArgs) -> Result<(), CommandError> {
     let info = load_jar(&args.version, &args.generic_args.cache)?;
+    let mut stack =
+        storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
+    for identifier in args.identifiers {
+        let providers =
+            versions::get_providers(&info.version, &mut stack, &identifier.identifier());
+    }
     Ok(())
 }
 
