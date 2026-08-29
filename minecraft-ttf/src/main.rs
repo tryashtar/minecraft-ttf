@@ -322,10 +322,10 @@ enum CommandError {
 
 fn run(command: Command) -> Result<(), CommandError> {
     match command {
-        Command::Vanilla(VanillaCommand::Generate(args)) => vanilla_generate(args),
-        Command::Vanilla(VanillaCommand::History(args)) => vanilla_history(args),
-        Command::Pack(PackCommand::Generate(args)) => pack_generate(args),
-        Command::Pack(PackCommand::List(args)) => pack_list(args),
+        Command::Vanilla(VanillaCommand::Generate(args)) => vanilla_generate(&args),
+        Command::Vanilla(VanillaCommand::History(args)) => vanilla_history(&args),
+        Command::Pack(PackCommand::Generate(args)) => pack_generate(&args),
+        Command::Pack(PackCommand::List(args)) => pack_list(&args),
     }
 }
 
@@ -398,15 +398,15 @@ impl providers::ProviderOptions for GenerateArgs {
     }
 }
 
-fn vanilla_generate(args: VanillaGenerateArgs) -> Result<(), CommandError> {
+fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     let info = load_jar(&args.version, &args.generic_args.cache)?;
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
-    for identifier in args.identifiers {
+    for identifier in &args.identifiers {
         let providers = versions::get_providers(
             &info.version,
             &mut stack,
-            &identifier.into(),
+            &(*identifier).into(),
             &args.generate_args,
         )?;
         match providers {
@@ -419,14 +419,14 @@ fn vanilla_generate(args: VanillaGenerateArgs) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn vanilla_history(args: VanillaHistoryArgs) -> Result<(), CommandError> {
+fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn pack_generate(args: PackGenerateArgs) -> Result<(), CommandError> {
+fn pack_generate(args: &PackGenerateArgs) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn pack_list(args: PackListArgs) -> Result<(), CommandError> {
+fn pack_list(args: &PackListArgs) -> Result<(), CommandError> {
     Ok(())
 }

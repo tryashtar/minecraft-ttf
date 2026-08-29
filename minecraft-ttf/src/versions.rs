@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
+    ops::RangeInclusive,
     path::{Path, PathBuf},
 };
 
@@ -58,10 +59,9 @@ impl Display for VanillaFontId {
 
 #[derive(Debug)]
 pub struct MinecraftVersion {
-    pub name: String,
+    pub name: &'static str,
     pub providers: ProviderSupport,
     pub hardcoded_spaces: Option<HashMap<char, f32>>,
-    pub uneven_unifont: bool,
     pub asset_mount: PathBuf,
 }
 
@@ -76,6 +76,7 @@ pub enum ForceUniformBehavior {
 pub struct LegacyUnifont {
     template: String,
     sizes: PathBuf,
+    uneven_spacing: bool,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,7 @@ pub enum CharSource {
 pub enum ProviderSupport {
     Supported {
         uniform: ForceUniformBehavior,
+        uneven_unifont: bool,
     },
     Hardcoded {
         chars: CharSource,
@@ -145,12 +147,12 @@ pub fn detect_version(
         .is_some_and(|x| x.as_int() >= 89)
     {
         return Ok(MinecraftVersion {
-            name: String::from("26.3-snapshot-1+"),
+            name: "26.3-snapshot-1+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::Filter,
+                uneven_unifont: true,
             },
-            uneven_unifont: true,
             hardcoded_spaces: None,
         });
     }
@@ -161,12 +163,12 @@ pub fn detect_version(
         && version_json.world_version.is_some_and(|x| x >= 4896)
     {
         return Ok(MinecraftVersion {
-            name: String::from("26.2-pre-3+"),
+            name: "26.2-pre-3+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::Filter,
+                uneven_unifont: false,
             },
-            uneven_unifont: false,
             hardcoded_spaces: None,
         });
     }
@@ -176,12 +178,12 @@ pub fn detect_version(
         .is_some_and(|x| x.as_int() >= 26)
     {
         return Ok(MinecraftVersion {
-            name: String::from("24w06a+"),
+            name: "24w06a+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::Filter,
+                uneven_unifont: true,
             },
-            uneven_unifont: true,
             hardcoded_spaces: None,
         });
     }
@@ -191,12 +193,12 @@ pub fn detect_version(
         .is_some_and(|x| x.as_int() >= 9)
     {
         return Ok(MinecraftVersion {
-            name: String::from("22w11a+"),
+            name: "22w11a+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::SwitchIdentifier,
+                uneven_unifont: true,
             },
-            uneven_unifont: true,
             hardcoded_spaces: None,
         });
     }
@@ -207,15 +209,16 @@ pub fn detect_version(
         && version_json.world_version.is_some_and(|x| x >= 2966)
     {
         return Ok(MinecraftVersion {
-            name: String::from("22w03a+"),
+            name: "22w03a+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::SwitchIdentifier,
+                uneven_unifont: true,
             },
-            uneven_unifont: true,
             hardcoded_spaces: Some(HashMap::from([(' ', 4.0), ('\u{200c}', 0.0)])),
         });
     }
+    let simple_spaces = Some(HashMap::from([(' ', 4.0)]));
     if version_json
         .pack_version
         .as_ref()
@@ -223,28 +226,280 @@ pub fn detect_version(
         && version_json.world_version.is_some_and(|x| x >= 2529)
     {
         return Ok(MinecraftVersion {
-            name: String::from("20w17a+"),
+            name: "20w17a+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::SwitchIdentifier,
+                uneven_unifont: true,
             },
-            uneven_unifont: true,
-            hardcoded_spaces: Some(HashMap::from([(' ', 4.0)])),
+            hardcoded_spaces: simple_spaces,
         });
     }
     let names = jar.file_names().collect::<HashSet<_>>();
     if names.contains("assets/minecraft/font/default.json") {
         return Ok(MinecraftVersion {
-            name: String::from("1.13-pre7+"),
+            name: "1.13-pre7+",
             asset_mount: PathBuf::from("assets"),
             providers: ProviderSupport::Supported {
                 uniform: ForceUniformBehavior::SkipBitmaps,
+                uneven_unifont: true,
             },
-            uneven_unifont: true,
-            hardcoded_spaces: Some(HashMap::from([(' ', 4.0)])),
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    let asset_map = HashMap::from([
+        (
+            VanillaFontId::Default,
+            Some(PathBuf::from("assets/minecraft/textures/font/ascii.png")),
+        ),
+        (
+            VanillaFontId::Alt,
+            Some(PathBuf::from(
+                "assets/minecraft/textures/font/ascii_sga.png",
+            )),
+        ),
+        (VanillaFontId::Uniform, None),
+    ]);
+    let new_unifont = Some(LegacyUnifont {
+        template: String::from("assets/minecraft/textures/font/unicode_page_%x.png"),
+        sizes: PathBuf::from("assets/minecraft/font/glyph_sizes.bin"),
+        uneven_spacing: true,
+    });
+    if !names.contains("font.txt") && names.contains("assets/minecraft/textures/font/ascii.png") {
+        let chars = HardcodedCharsBuilder::new(16, 16)
+            .add_chars("ÀÁÂÈÊËÍÓÔÕÚßãõğİıŒœŞşŴŵžȇ")
+            .add_blanks(7)
+            .add_chars(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
+            .add_blanks(1)
+            .add_chars("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αβΓπΣσμτΦΘΩδ∞∅∈∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■")
+            .add_blanks(1)
+            .build();
+        return Ok(MinecraftVersion {
+            name: "13w42b+",
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::Hardcoded(chars),
+                textures: asset_map,
+                hardcoded_advances: None,
+                unifont: new_unifont,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    if names.contains("assets/minecraft/textures/font/ascii.png") {
+        return Ok(MinecraftVersion {
+            name: "13w24a+",
+            asset_mount: PathBuf::from("assets"),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::FromFile(PathBuf::from("font.txt")),
+                textures: asset_map,
+                hardcoded_advances: None,
+                unifont: new_unifont,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    if names.contains("font/glyph_sizes.bin") {
+        return Ok(MinecraftVersion {
+            name: "11w49a+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::FromFile(PathBuf::from("font.txt")),
+                textures: HashMap::from([
+                    (
+                        VanillaFontId::Default,
+                        Some(PathBuf::from("font/default.png")),
+                    ),
+                    (
+                        VanillaFontId::Alt,
+                        Some(PathBuf::from("font/alternate.png")),
+                    ),
+                    (VanillaFontId::Uniform, None),
+                ]),
+                hardcoded_advances: None,
+                unifont: Some(LegacyUnifont {
+                    template: String::from("font/glyph_%X.png"),
+                    sizes: PathBuf::from("font/glyph_sizes.bin"),
+                    uneven_spacing: true,
+                }),
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    if names.contains("font/alternate.png") {
+        return Ok(MinecraftVersion {
+            name: "b1.9-pre3+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::FromFile(PathBuf::from("font.txt")),
+                textures: HashMap::from([
+                    (
+                        VanillaFontId::Default,
+                        Some(PathBuf::from("font/default.png")),
+                    ),
+                    (
+                        VanillaFontId::Alt,
+                        Some(PathBuf::from("font/alternate.png")),
+                    ),
+                ]),
+                hardcoded_advances: None,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    let simple_map = HashMap::from([(
+        VanillaFontId::Default,
+        Some(PathBuf::from("font/default.png")),
+    )]);
+    if names.contains("font.txt") {
+        return Ok(MinecraftVersion {
+            name: "b1.1+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::FromFile(PathBuf::from("font.txt")),
+                textures: simple_map,
+                hardcoded_advances: None,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    if names.contains("lang/en_US.lang") {
+        let chars = HardcodedCharsBuilder::new(16, 16)
+            .add_blanks(32)
+            .add_chars(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~â")
+            .add_chars("Œ‚Ã‡Ã¼Ã©Ã¢Ã¤Ã\u{00a0}Ã¥Ã§ÃªÃ«Ã¨Ã¯Ã®Ã¬Ã„Ã…Ã‰Ã¦Ã†Ã´Ã¶Ã²Ã»Ã¹Ã¿Ã–ÃœÃ¸Â£Ã˜Ã—Æ’Ã¡Ã\u{00ad}Ã³ÃºÃ±Ã‘ÂªÂºÂ¿Â®Â¬Â½Â¼Â¡Â«")
+            .add_blanks(30)
+            .build();
+        return Ok(MinecraftVersion {
+            name: "b1.0+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::Hardcoded(chars),
+                textures: simple_map,
+                hardcoded_advances: None,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    let alpha_chars = HardcodedCharsBuilder::new(16, 16)
+        .add_blanks(32)
+        .add_chars(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~â")
+        .add_chars("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»")
+        .add_blanks(80)
+        .build();
+    if names.contains("font/default.png") {
+        return Ok(MinecraftVersion {
+            name: "a1.2.2+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::Hardcoded(alpha_chars),
+                textures: simple_map,
+                hardcoded_advances: None,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    if names.contains("mob/cow.png") {
+        return Ok(MinecraftVersion {
+            name: "a1.0.9+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::Hardcoded(alpha_chars),
+                textures: HashMap::from([(
+                    VanillaFontId::Default,
+                    Some(PathBuf::from("default.png")),
+                )]),
+                hardcoded_advances: None,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    let full_chars = HardcodedCharsBuilder::new(16, 16)
+        .add_range('\u{0000}'..='\u{00ff}')
+        .build();
+    let zero_advances = Some(
+        ('\u{0080}'..='\u{00ff}')
+            .map(|x| (x, 0.0))
+            .collect::<HashMap<_, _>>(),
+    );
+    if names.contains("default.png") {
+        return Ok(MinecraftVersion {
+            name: "c0.0.17a+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::Hardcoded(full_chars),
+                textures: HashMap::from([(
+                    VanillaFontId::Default,
+                    Some(PathBuf::from("default.png")),
+                )]),
+                hardcoded_advances: zero_advances,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
+        });
+    }
+    if names.contains("default.gif") {
+        return Ok(MinecraftVersion {
+            name: "c0.0.2a+",
+            asset_mount: PathBuf::default(),
+            providers: ProviderSupport::Hardcoded {
+                chars: CharSource::Hardcoded(full_chars),
+                textures: HashMap::from([(
+                    VanillaFontId::Default,
+                    Some(PathBuf::from("default.gif")),
+                )]),
+                hardcoded_advances: zero_advances,
+                unifont: None,
+            },
+            hardcoded_spaces: simple_spaces,
         });
     }
     Err(VersionError::UnknownVersion)
+}
+
+#[derive(Debug, Default)]
+struct HardcodedCharsBuilder {
+    width: usize,
+    height: usize,
+    chars: Vec<Option<char>>,
+}
+
+impl HardcodedCharsBuilder {
+    fn new(width: usize, height: usize) -> Self {
+        Self {
+            width,
+            height,
+            chars: vec![],
+        }
+    }
+
+    fn add_chars(mut self, string: &str) -> Self {
+        self.chars.extend(string.chars().map(Some));
+        self
+    }
+
+    fn add_blanks(mut self, num: usize) -> Self {
+        for _ in 0..num {
+            self.chars.push(None)
+        }
+        self
+    }
+
+    fn add_range(mut self, chars: RangeInclusive<char>) -> Self {
+        for char in chars {
+            self.chars.push(Some(char));
+        }
+        self
+    }
+
+    fn build(self) -> ndarray::Array2<Option<char>> {
+        ndarray::Array2::from_shape_vec((self.width, self.height), self.chars).unwrap()
+    }
 }
 
 pub fn get_providers(
@@ -256,7 +511,10 @@ pub fn get_providers(
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
     match &version.providers {
-        ProviderSupport::Supported { uniform } => {}
+        ProviderSupport::Supported {
+            uniform,
+            uneven_unifont,
+        } => {}
         ProviderSupport::Hardcoded {
             chars,
             textures,

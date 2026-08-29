@@ -291,8 +291,7 @@ pub trait ProviderOptions {
 
 pub fn normal_advance(bitmap: &Bitmap, height: i32) -> f32 {
     let scale = height as f32 / bitmap.height() as f32;
-    let advance = (0.5 + bitmap.width() as f32 * scale).floor() + 1.0;
-    advance
+    (0.5 + bitmap.width() as f32 * scale).floor() + 1.0
 }
 
 pub fn uneven_uniform_advance(bitmap: &Bitmap) -> f32 {
@@ -301,6 +300,5 @@ pub fn uneven_uniform_advance(bitmap: &Bitmap) -> f32 {
 }
 
 pub fn even_uniform_advance(bitmap: &Bitmap) -> f32 {
-    let advance = (bitmap.width() as f32 / 2.0) + 1.0;
-    advance
+    (bitmap.width() as f32 / 2.0) + 1.0
 }
