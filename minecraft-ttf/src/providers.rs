@@ -1,15 +1,16 @@
 use std::{
     cmp::{max, min},
     collections::HashMap,
+    ffi::OsStr,
     fmt::Display,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
 use bitmap_ttf::bitmap::{Bitmap, Rectangle};
 use image::GenericImageView;
 
-use crate::storage;
+use crate::{cache, storage};
 
 #[derive(Debug)]
 pub struct CharBitmap {
@@ -51,7 +52,7 @@ pub enum Provider {
     Space(SpaceProvider),
 }
 
-#[derive(Debug, Clone)]
+#[derive(serde_with::DeserializeFromStr, Debug, Clone)]
 pub struct Identifier {
     pub namespace: String,
     pub body: PathBuf,
@@ -64,6 +65,20 @@ impl Identifier {
 
     pub fn vanilla(body: PathBuf) -> Self {
         Self::new(String::from("minecraft"), body)
+    }
+
+    pub fn to_entry(&self, kind: Option<&str>, suffix: Option<&str>) -> PathBuf {
+        let mut result = PathBuf::from("assets");
+        result.push(&self.namespace);
+        if let Some(kind) = kind {
+            result.push(kind);
+        }
+        result.push(&self.body);
+        if let Some(suffix) = suffix {
+            result = cache::push_path_str(result, OsStr::new("."));
+            result = cache::push_path_str(result, OsStr::new(suffix));
+        }
+        result
     }
 }
 
@@ -301,4 +316,122 @@ pub fn uneven_uniform_advance(bitmap: &Bitmap) -> f32 {
 
 pub fn even_uniform_advance(bitmap: &Bitmap) -> f32 {
     (bitmap.width() as f32 / 2.0) + 1.0
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct RootJsonProvider {
+    providers: Vec<JsonProvider>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum JsonProvider {
+    Bitmap(JsonBitmapProvider),
+    Space(JsonSpaceProvider),
+    Reference(JsonReferenceProvider),
+    LegacyUnicode(JsonLegacyUnicodeProvider),
+    Unihex(JsonUnihexProvider),
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonProviderFilter {
+    uniform: Option<bool>,
+    jp: Option<bool>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonBitmapProvider {
+    filter: Option<JsonProviderFilter>,
+    file: Identifier,
+    height: Option<i32>,
+    ascent: i32,
+    chars: Vec<String>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonSpaceProvider {
+    filter: Option<JsonProviderFilter>,
+    advances: HashMap<char, f32>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonReferenceProvider {
+    filter: Option<JsonProviderFilter>,
+    id: Identifier,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonLegacyUnicodeProvider {
+    filter: Option<JsonProviderFilter>,
+    sizes: Identifier,
+    template: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct JsonUnihexProvider {
+    filter: Option<JsonProviderFilter>,
+    hex_file: Identifier,
+    size_overrides: Option<Vec<UnihexSizeOverride>>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct UnihexSizeOverride {
+    from: char,
+    to: char,
+    left: u32,
+    right: u32,
+}
+
+#[derive(Debug)]
+pub struct ProviderBehavior {
+    pub uniform: ForceUniformBehavior,
+    pub uneven_unifont: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ForceUniformBehavior {
+    Filter,
+    SkipBitmaps,
+    SwitchIdentifier,
+}
+
+pub fn load_providers(
+    identifier: &Identifier,
+    store: &mut storage::StackStorage,
+    options: &impl ProviderOptions,
+    behavior: &ProviderBehavior,
+) -> Result<Option<Providers>, ProvidersError> {
+    let entry = identifier.to_entry(Some("font"), Some("json"));
+    let Some((providers, times)) = read_stacked_providers(store, &entry)? else {
+        return Ok(None);
+    };
+    Ok(None)
+}
+
+fn read_stacked_providers(
+    store: &mut storage::StackStorage,
+    entry: &Path,
+) -> Result<Option<(Vec<JsonProvider>, ModifiedTimes)>, storage::StorageError> {
+    let mut providers = vec![];
+    let mut times = ModifiedTimes::default();
+    let mut any = false;
+    for storage in store.0.iter_mut().rev() {
+        let data = match storage::read_json::<RootJsonProvider, _>(Box::as_mut(storage), entry) {
+            Err(storage::StorageError::FileNotFound) => {
+                continue;
+            }
+            Err(e) => {
+                return Err(e);
+            }
+            Ok(data) => data,
+        };
+        any = true;
+        times.update(data.modified_time);
+        providers.extend(data.data.providers);
+    }
+    if any {
+        Ok(Some((providers, times)))
+    } else {
+        Ok(None)
+    }
 }

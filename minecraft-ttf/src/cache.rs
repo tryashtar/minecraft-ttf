@@ -113,7 +113,7 @@ pub fn get_jar(
     Ok(zip)
 }
 
-fn push_path_str(path: PathBuf, str: &OsStr) -> PathBuf {
+pub fn push_path_str(path: PathBuf, str: &OsStr) -> PathBuf {
     let mut string = path.into_os_string();
     string.push(str);
     PathBuf::from(string)

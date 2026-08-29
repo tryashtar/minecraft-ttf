@@ -1,8 +1,8 @@
 use std::{
     fmt::{Display, Write},
-    ops::RangeInclusive,
     path::{Path, PathBuf},
     process::ExitCode,
+    range::RangeInclusive,
     str::FromStr,
 };
 
@@ -124,7 +124,10 @@ impl CharRange {
 
     fn all() -> Self {
         Self {
-            ranges: vec![char::MIN..=char::MAX],
+            ranges: vec![RangeInclusive {
+                start: char::MIN,
+                last: char::MAX,
+            }],
         }
     }
 
@@ -136,7 +139,7 @@ impl CharRange {
 impl Display for CharRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, range) in self.ranges.iter().enumerate() {
-            write!(f, "{0:x}-{1:x}", *range.start() as u32, *range.end() as u32)?;
+            write!(f, "{0:x}-{1:x}", range.start as u32, range.last as u32)?;
             if i < self.ranges.len() - 1 {
                 write!(f, ",")?;
             }
@@ -200,8 +203,14 @@ impl CharRangeBuilder {
     fn next_range(&mut self) -> Result<(), CharRangeError> {
         let char = self.parse_char()?;
         let range = match self.first_codepoint {
-            None => char..=char,
-            Some(first) => first..=char,
+            None => RangeInclusive {
+                start: char,
+                last: char,
+            },
+            Some(first) => RangeInclusive {
+                start: first,
+                last: char,
+            },
         };
         self.ranges.push(range);
         Ok(())

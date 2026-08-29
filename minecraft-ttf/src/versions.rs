@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
-    ops::RangeInclusive,
     path::{Path, PathBuf},
 };
 
@@ -66,13 +65,6 @@ pub struct MinecraftVersion {
 }
 
 #[derive(Debug)]
-pub enum ForceUniformBehavior {
-    Filter,
-    SkipBitmaps,
-    SwitchIdentifier,
-}
-
-#[derive(Debug)]
 pub struct LegacyUnifont {
     template: String,
     sizes: PathBuf,
@@ -87,10 +79,7 @@ pub enum CharSource {
 
 #[derive(Debug)]
 pub enum ProviderSupport {
-    Supported {
-        uniform: ForceUniformBehavior,
-        uneven_unifont: bool,
-    },
+    Supported(providers::ProviderBehavior),
     Hardcoded {
         chars: CharSource,
         textures: HashMap<VanillaFontId, Option<PathBuf>>,
@@ -149,10 +138,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "26.3-snapshot-1+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::Filter,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::Filter,
                 uneven_unifont: true,
-            },
+            }),
             hardcoded_spaces: None,
         });
     }
@@ -165,10 +154,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "26.2-pre-3+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::Filter,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::Filter,
                 uneven_unifont: false,
-            },
+            }),
             hardcoded_spaces: None,
         });
     }
@@ -180,10 +169,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "24w06a+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::Filter,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::Filter,
                 uneven_unifont: true,
-            },
+            }),
             hardcoded_spaces: None,
         });
     }
@@ -195,10 +184,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "22w11a+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::SwitchIdentifier,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::SwitchIdentifier,
                 uneven_unifont: true,
-            },
+            }),
             hardcoded_spaces: None,
         });
     }
@@ -211,10 +200,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "22w03a+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::SwitchIdentifier,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::SwitchIdentifier,
                 uneven_unifont: true,
-            },
+            }),
             hardcoded_spaces: Some(HashMap::from([(' ', 4.0), ('\u{200c}', 0.0)])),
         });
     }
@@ -228,10 +217,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "20w17a+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::SwitchIdentifier,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::SwitchIdentifier,
                 uneven_unifont: true,
-            },
+            }),
             hardcoded_spaces: simple_spaces,
         });
     }
@@ -240,10 +229,10 @@ pub fn detect_version(
         return Ok(MinecraftVersion {
             name: "1.13-pre7+",
             asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported {
-                uniform: ForceUniformBehavior::SkipBitmaps,
+            providers: ProviderSupport::Supported(providers::ProviderBehavior {
+                uniform: providers::ForceUniformBehavior::SkipBitmaps,
                 uneven_unifont: true,
-            },
+            }),
             hardcoded_spaces: simple_spaces,
         });
     }
@@ -490,7 +479,7 @@ impl HardcodedCharsBuilder {
         self
     }
 
-    fn add_range(mut self, chars: RangeInclusive<char>) -> Self {
+    fn add_range(mut self, chars: impl Iterator<Item = char>) -> Self {
         for char in chars {
             self.chars.push(Some(char));
         }
@@ -504,17 +493,16 @@ impl HardcodedCharsBuilder {
 
 pub fn get_providers(
     version: &MinecraftVersion,
-    store: &mut impl storage::Storage,
+    store: &mut storage::StackStorage,
     identifier: &providers::Identifier,
     options: &impl providers::ProviderOptions,
 ) -> Result<Option<providers::Providers>, providers::ProvidersError> {
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
     match &version.providers {
-        ProviderSupport::Supported {
-            uniform,
-            uneven_unifont,
-        } => {}
+        ProviderSupport::Supported(behavior) => {
+            let providers = providers::load_providers(identifier, store, options, behavior)?;
+        }
         ProviderSupport::Hardcoded {
             chars,
             textures,

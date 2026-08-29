@@ -34,6 +34,8 @@ pub enum StorageError {
     Parse(#[from] std::string::FromUtf8Error),
     #[error(transparent)]
     Image(#[from] image::ImageError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Debug)]
@@ -213,6 +215,19 @@ pub fn read_font_txt(
         .collect();
     Ok(ReadEntry {
         data: lines,
+        modified_time,
+    })
+}
+
+pub fn read_json<T: serde::de::DeserializeOwned, J: Storage + ?Sized>(
+    store: &mut J,
+    entry: &Path,
+) -> Result<ReadEntry<T>, StorageError> {
+    let modified_time = store.modified_time(entry)?;
+    let data = store.read(entry)?;
+    let result = serde_json::from_slice(&data)?;
+    Ok(ReadEntry {
+        data: result,
         modified_time,
     })
 }
