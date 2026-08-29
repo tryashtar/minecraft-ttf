@@ -164,8 +164,7 @@ def even_uniform_advance(bitmap: Bitmap) -> float:
     return advance
 
 # read JSON providers from the game, find their referenced assets, and load them into our providers
-def convert_provider(store: Storage, provider: JsonProvider, options: ProviderOptions, uneven_unifont: bool, times: ModifiedTimes) -> list[Provider]:
-    assert provider['type'] != 'reference'
+def convert_provider(store: Storage, provider: ResolvedJsonProvider, options: ProviderOptions, uneven_unifont: bool, times: ModifiedTimes) -> list[Provider]:
     match provider['type']:
         case 'bitmap':
             img_entry = identifier_to_entry(provider['file'], kind='textures', suffix=None)

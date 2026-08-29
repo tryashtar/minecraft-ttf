@@ -402,36 +402,101 @@ pub fn load_providers(
     behavior: &ProviderBehavior,
 ) -> Result<Option<Providers>, ProvidersError> {
     let entry = identifier.to_entry(Some("font"), Some("json"));
-    let Some((providers, times)) = read_stacked_providers(store, &entry)? else {
-        return Ok(None);
-    };
-    Ok(None)
+    match read_stacked_providers(store, &entry) {
+        Err(storage::StorageError::FileNotFound) => Ok(None),
+        Err(err) => Err(ProvidersError::Storage(err)),
+        Ok((providers, mut times)) => {
+            let mut converted = vec![];
+            for single in providers {
+                let subs = convert_provider(store, options, behavior, single)?;
+                converted.extend(subs.providers);
+                times.merge(subs.times);
+            }
+            Ok(Some(Providers {
+                providers: converted,
+                times,
+            }))
+        }
+    }
+}
+
+fn convert_provider(
+    store: &mut storage::StackStorage,
+    options: &impl ProviderOptions,
+    behavior: &ProviderBehavior,
+    provider: JsonProvider,
+) -> Result<Providers, ProvidersError> {
+    let mut times = ModifiedTimes::default();
+    match provider {
+        JsonProvider::Bitmap(bitmap) => {
+            let img_entry = bitmap.file.to_entry(Some("textures"), None);
+            let img_data = storage::read_image(store, &img_entry)?;
+            times.update(img_data.modified_time);
+            let height = bitmap.height.unwrap_or(8);
+            let has_color = options.has_color(&img_data.data);
+            let grid = split_grid(bitmap.chars.iter(), true)?;
+            let char_images = image_grid(&img_data.data, &grid, None, |x| options.include_char(x));
+            let chars = char_images
+                .into_iter()
+                .map(|(char, (content_box, bitmap))| {
+                    let advance = normal_advance(&bitmap, height);
+                    (
+                        char,
+                        CharImage {
+                            content_box,
+                            bitmap,
+                            advance,
+                            bold_offset: 1.0,
+                        },
+                    )
+                })
+                .collect();
+            let full = ImageProvider {
+                image: img_data.data,
+                has_color,
+                height,
+                ascent: bitmap.ascent,
+                chars,
+            };
+            Ok(Providers {
+                providers: vec![Provider::Image(full)],
+                times,
+            })
+        }
+        JsonProvider::Space(space) => {
+            let full = SpaceProvider {
+                chars: space.advances.clone(),
+            };
+            Ok(Providers {
+                providers: vec![Provider::Space(full)],
+                times,
+            })
+        }
+        JsonProvider::Reference(reference) => {
+            let resolved = load_providers(&reference.id, store, options, behavior)?
+                .ok_or(storage::StorageError::FileNotFound)?;
+            Ok(resolved)
+        }
+        JsonProvider::LegacyUnicode(unicode) => todo!(),
+        JsonProvider::Unihex(unihex) => todo!(),
+    }
 }
 
 fn read_stacked_providers(
     store: &mut storage::StackStorage,
     entry: &Path,
-) -> Result<Option<(Vec<JsonProvider>, ModifiedTimes)>, storage::StorageError> {
-    let mut providers = vec![];
+) -> Result<(Vec<JsonProvider>, ModifiedTimes), storage::StorageError> {
+    let results = storage::stack_all(store, |x| {
+        storage::read_json::<RootJsonProvider, _>(x, entry)
+    })?;
     let mut times = ModifiedTimes::default();
-    let mut any = false;
-    for storage in store.0.iter_mut().rev() {
-        let data = match storage::read_json::<RootJsonProvider, _>(Box::as_mut(storage), entry) {
-            Err(storage::StorageError::FileNotFound) => {
-                continue;
-            }
-            Err(e) => {
-                return Err(e);
-            }
-            Ok(data) => data,
-        };
-        any = true;
-        times.update(data.modified_time);
-        providers.extend(data.data.providers);
-    }
-    if any {
-        Ok(Some((providers, times)))
-    } else {
-        Ok(None)
-    }
+    let mapped = results
+        .into_iter()
+        .rev()
+        .flat_map(|x| {
+            times.update(x.modified_time);
+            x.data.providers
+        })
+        .collect();
+    Ok((mapped, times))
 }

@@ -501,7 +501,10 @@ pub fn get_providers(
     let mut times = providers::ModifiedTimes::default();
     match &version.providers {
         ProviderSupport::Supported(behavior) => {
-            let providers = providers::load_providers(identifier, store, options, behavior)?;
+            let Some(providers) = providers::load_providers(identifier, store, options, behavior)?
+            else {
+                return Ok(None);
+            };
         }
         ProviderSupport::Hardcoded {
             chars,

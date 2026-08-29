@@ -163,6 +163,32 @@ fn stack_first<T>(
     Err(StorageError::FileNotFound)
 }
 
+pub fn stack_all<T>(
+    storage: &mut StackStorage,
+    mut callback: impl FnMut(&mut dyn Storage) -> Result<T, StorageError>,
+) -> Result<Vec<T>, StorageError> {
+    let mut results = vec![];
+    for sub in storage.0.iter_mut() {
+        let result = callback(Box::as_mut(sub));
+        match result {
+            Err(StorageError::FileNotFound) => {
+                continue;
+            }
+            Err(err) => {
+                return Err(err);
+            }
+            Ok(result) => {
+                results.push(result);
+            }
+        }
+    }
+    if results.is_empty() {
+        Err(StorageError::FileNotFound)
+    } else {
+        Ok(results)
+    }
+}
+
 impl Storage for StackStorage {
     fn get_entries(&self, prefix: &Path) -> Result<HashSet<PathBuf>, StorageError> {
         let mut result = HashSet::new();
