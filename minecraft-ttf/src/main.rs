@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+use image::GenericImageView;
 use tracing::error;
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -364,12 +365,50 @@ fn load_jar(
     })
 }
 
+fn image_has_color(image: &image::DynamicImage) -> bool {
+    image.pixels().all(|(_, _, pixel)| {
+        let [r, g, b, a] = pixel.0;
+        a == 0 || (r == 255 && g == 255 && b == 255)
+    })
+}
+
+impl providers::ProviderOptions for GenerateArgs {
+    fn has_color(&self, image: &image::DynamicImage) -> bool {
+        match self.color {
+            ColorMode::Always => true,
+            ColorMode::Never => false,
+            ColorMode::Auto => image_has_color(image),
+        }
+    }
+
+    fn include_char(&self, char: char) -> bool {
+        self.chars.matches(char)
+    }
+
+    fn include_unifont_char(&self, char: char) -> bool {
+        self.unifont_chars.matches(char)
+    }
+
+    fn option_uniform(&self) -> bool {
+        self.option_uniform
+    }
+
+    fn option_jp(&self) -> bool {
+        self.option_jp
+    }
+}
+
 fn vanilla_generate(args: VanillaGenerateArgs) -> Result<(), CommandError> {
     let info = load_jar(&args.version, &args.generic_args.cache)?;
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     for identifier in args.identifiers {
-        let providers = versions::get_providers(&info.version, &mut stack, &identifier.into())?;
+        let providers = versions::get_providers(
+            &info.version,
+            &mut stack,
+            &identifier.into(),
+            &args.generate_args,
+        )?;
         match providers {
             None => {
                 println!("No providers found for {0}", identifier);

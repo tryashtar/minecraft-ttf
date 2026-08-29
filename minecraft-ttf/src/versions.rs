@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use bitmap_ttf::bitmap::Bitmap;
+
 use crate::{
-    providers::{self, split_grid},
+    providers::{self, normal_advance, split_grid},
     storage,
 };
 
@@ -90,7 +92,7 @@ pub enum ProviderSupport {
     Hardcoded {
         chars: CharSource,
         textures: HashMap<VanillaFontId, Option<PathBuf>>,
-        hardcoded_sizes: Option<HashMap<char, f32>>,
+        hardcoded_advances: Option<HashMap<char, f32>>,
         unifont: Option<LegacyUnifont>,
     },
 }
@@ -249,6 +251,7 @@ pub fn get_providers(
     version: &MinecraftVersion,
     store: &mut impl storage::Storage,
     identifier: &providers::Identifier,
+    options: &impl providers::ProviderOptions,
 ) -> Result<Option<providers::Providers>, providers::ProvidersError> {
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
@@ -257,7 +260,7 @@ pub fn get_providers(
         ProviderSupport::Hardcoded {
             chars,
             textures,
-            hardcoded_sizes,
+            hardcoded_advances,
             unifont,
         } => {
             let Ok(vanilla) = TryInto::<VanillaFontId>::try_into(identifier) else {
@@ -267,20 +270,12 @@ pub fn get_providers(
                 return Ok(None);
             };
             if let Some(texture) = texture {
-                let image = storage::read_image(store, texture)?;
-                match chars {
-                    CharSource::FromFile(path) => {
-                        let lines = storage::read_font_txt(store, path)?;
-                        times.update(lines.modified_time);
-                        let content = split_grid(lines.data.iter(), false)?;
-                        let mut array = ndarray::Array2::from_elem((2, content.ncols()), None);
-                        array.append(ndarray::Axis(0), content.view()).unwrap();
-                        let blank_rows = ndarray::Array2::from_elem((5, array.ncols()), None);
-                        array.append(ndarray::Axis(0), blank_rows.view()).unwrap();
-                    }
-                    CharSource::Hardcoded(array) => {}
-                };
+                let (provider, subtimes) =
+                    legacy_bitmap(store, texture, chars, hardcoded_advances.as_ref(), options)?;
+                times.merge(subtimes);
+                providers.push(providers::Provider::Image(provider));
             }
+            if let Some(unifont) = unifont {}
         }
     }
     if let Some(spaces) = &version.hardcoded_spaces {
@@ -290,4 +285,71 @@ pub fn get_providers(
         providers.push(providers::Provider::Space(provider));
     }
     Ok(Some(providers::Providers { providers, times }))
+}
+
+fn legacy_bitmap(
+    store: &mut impl storage::Storage,
+    texture: &Path,
+    chars: &CharSource,
+    advances: Option<&HashMap<char, f32>>,
+    options: &impl providers::ProviderOptions,
+) -> Result<(providers::ImageProvider, providers::ModifiedTimes), providers::ProvidersError> {
+    let mut times = providers::ModifiedTimes::default();
+    let image = storage::read_image(store, texture)?;
+    times.update(image.modified_time);
+    let char_images = match chars {
+        CharSource::FromFile(path) => {
+            let lines = storage::read_font_txt(store, path)?;
+            times.update(lines.modified_time);
+            let content = split_grid(lines.data.iter(), false)?;
+            let mut array = ndarray::Array2::from_elem((2, content.ncols()), None);
+            array.append(ndarray::Axis(0), content.view()).unwrap();
+            let blank_rows = ndarray::Array2::from_elem((5, array.ncols()), None);
+            array.append(ndarray::Axis(0), blank_rows.view()).unwrap();
+            providers::image_grid(&image.data, &array, None, |x| options.include_char(x))
+        }
+        CharSource::Hardcoded(array) => {
+            providers::image_grid(&image.data, array, None, |x| options.include_char(x))
+        }
+    };
+    let height = 8i32;
+    let char_advance = |char: char, bitmap: &Bitmap| -> f32 {
+        match advances {
+            None => normal_advance(bitmap, height),
+            Some(sizes) => match sizes.get(&char) {
+                Some(size) => *size,
+                None => {
+                    let mut normal = normal_advance(bitmap, height);
+                    if normal == 8.0 {
+                        normal += 1.0;
+                    }
+                    normal
+                }
+            },
+        }
+    };
+    let has_color = options.has_color(&image.data);
+    let chars = char_images
+        .into_iter()
+        .map(|(char, (content_box, bitmap))| {
+            let advance = char_advance(char, &bitmap);
+            (
+                char,
+                providers::CharImage {
+                    content_box,
+                    bitmap,
+                    advance,
+                    bold_offset: 1.0,
+                },
+            )
+        })
+        .collect();
+    let provider = providers::ImageProvider {
+        image: image.data,
+        has_color,
+        height,
+        ascent: 7,
+        chars,
+    };
+    Ok((provider, times))
 }

@@ -7,6 +7,7 @@ use std::{
 };
 
 use bitmap_ttf::bitmap::{Bitmap, Rectangle};
+use image::GenericImageView;
 
 use crate::storage;
 
@@ -33,6 +34,7 @@ pub struct CharImage {
 
 pub struct ImageProvider {
     pub image: image::DynamicImage,
+    pub has_color: bool,
     pub height: i32,
     pub ascent: i32,
     pub chars: indexmap::IndexMap<char, CharImage>,
@@ -157,6 +159,11 @@ impl ModifiedTimes {
             });
         }
     }
+
+    pub fn merge(&mut self, other: ModifiedTimes) {
+        self.update(other.oldest);
+        self.update(other.newest);
+    }
 }
 
 pub struct Providers {
@@ -198,11 +205,11 @@ pub enum ProvidersError {
 }
 
 pub fn image_grid(
-    image: image::DynamicImage,
-    chars: ndarray::Array2<Option<char>>,
-    sizes: Option<HashMap<char, (u32, u32)>>,
+    image: &image::DynamicImage,
+    chars: &ndarray::Array2<Option<char>>,
+    sizes: Option<&HashMap<char, (u32, u32)>>,
     include: impl Fn(char) -> bool,
-) -> indexmap::IndexMap<char, CharBitmap> {
+) -> indexmap::IndexMap<char, (Rectangle, Bitmap)> {
     let mut map = indexmap::IndexMap::new();
     let glyph_width = image.width() / (chars.ncols() as u32);
     let glyph_height = image.height() / (chars.nrows() as u32);
@@ -215,19 +222,85 @@ pub fn image_grid(
         }
         let left = col * (glyph_width as usize);
         let top = row * (glyph_height as usize);
-        let glyph_box = Rectangle {
+        let rectangle = Rectangle {
             left,
             top,
             width: glyph_width as usize,
             height: glyph_height as usize,
         };
-        let glyph = image::GenericImageView::view(
-            &image,
-            left as u32,
-            top as u32,
-            glyph_width,
-            glyph_height,
-        );
+        let size = match sizes {
+            None => None,
+            Some(sizes) => sizes.get(char).copied(),
+        };
+        let portion = image_portion(image, &rectangle, size);
+        map.insert(*char, (rectangle, portion));
     }
     map
+}
+
+fn image_portion(
+    image: &image::DynamicImage,
+    rectangle: &Rectangle,
+    size: Option<(u32, u32)>,
+) -> Bitmap {
+    let glyph = image::GenericImageView::view(
+        image,
+        rectangle.left as u32,
+        rectangle.top as u32,
+        rectangle.width as u32,
+        rectangle.height as u32,
+    );
+    let bitmap = image_to_bitmap(glyph, 10);
+    let resize_box = match size {
+        None => {
+            let width = bitmap.content_box().map(|x| x.width).unwrap_or(0);
+            Rectangle {
+                left: 0,
+                top: 0,
+                width,
+                height: bitmap.height(),
+            }
+        }
+        Some((left, right)) => Rectangle {
+            left: left as usize,
+            top: 0,
+            width: (right - left) as usize,
+            height: bitmap.height(),
+        },
+    };
+    bitmap.resized(&resize_box)
+}
+
+fn image_to_bitmap(image: image::SubImage<&image::DynamicImage>, threshold: u8) -> Bitmap {
+    let mut bitmap = Bitmap::new(image.width() as usize, image.height() as usize);
+    for (x, y, pixel) in image.pixels() {
+        if pixel.0[3] >= threshold {
+            bitmap.set(x as usize, y as usize, true);
+        }
+    }
+    bitmap
+}
+
+pub trait ProviderOptions {
+    fn has_color(&self, image: &image::DynamicImage) -> bool;
+    fn include_char(&self, char: char) -> bool;
+    fn include_unifont_char(&self, char: char) -> bool;
+    fn option_uniform(&self) -> bool;
+    fn option_jp(&self) -> bool;
+}
+
+pub fn normal_advance(bitmap: &Bitmap, height: i32) -> f32 {
+    let scale = height as f32 / bitmap.height() as f32;
+    let advance = (0.5 + bitmap.width() as f32 * scale).floor() + 1.0;
+    advance
+}
+
+pub fn uneven_uniform_advance(bitmap: &Bitmap) -> f32 {
+    let advance = (bitmap.width() / 2) + 1;
+    advance as f32
+}
+
+pub fn even_uniform_advance(bitmap: &Bitmap) -> f32 {
+    let advance = (bitmap.width() as f32 / 2.0) + 1.0;
+    advance
 }
