@@ -409,6 +409,8 @@ impl providers::ProviderOptions for GenerateArgs {
 
 fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     let info = load_jar(&args.version, &args.generic_args.cache)?;
+    println!("Generating fonts from Minecraft {}", info.launcher.id);
+    println!("Font support level {}", info.version.name);
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     for identifier in &args.identifiers {
