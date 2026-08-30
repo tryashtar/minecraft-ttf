@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 bitvec = "1.1"
+jiff = "0.2"
 petgraph = "0.8"
+write-fonts = "0.52"
