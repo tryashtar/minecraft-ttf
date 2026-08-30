@@ -131,16 +131,20 @@ impl<T: std::io::Read + std::io::Seek> Storage for ZipStorage<T> {
         match file {
             Err(zip::result::ZipError::FileNotFound) => Err(StorageError::FileNotFound),
             Err(e) => Err(StorageError::Zip(e)),
-            Ok(file) => {
-                let Some(modified) = file.last_modified() else {
-                    return Ok(None);
-                };
-                let civil = jiff::civil::DateTime::try_from(modified)?;
-                let zoned = civil.to_zoned(jiff::tz::TimeZone::unknown())?;
-                Ok(Some(zoned.timestamp()))
-            }
+            Ok(file) => Ok(zip_time(&file)?),
         }
     }
+}
+
+pub fn zip_time(
+    file: &zip::read::ZipFile<impl std::io::Read + std::io::Seek>,
+) -> Result<Option<jiff::Timestamp>, jiff::Error> {
+    let Some(modified) = file.last_modified() else {
+        return Ok(None);
+    };
+    let civil = jiff::civil::DateTime::try_from(modified)?;
+    let zoned = civil.to_zoned(jiff::tz::TimeZone::unknown())?;
+    Ok(Some(zoned.timestamp()))
 }
 
 pub struct StackStorage(pub Vec<Box<dyn Storage>>);

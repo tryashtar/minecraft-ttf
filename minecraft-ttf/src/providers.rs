@@ -1,8 +1,9 @@
 use std::{
     cmp::{max, min},
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsStr,
     fmt::Display,
+    io::{BufRead, BufReader, Cursor},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -43,7 +44,7 @@ pub struct ImageProvider {
 
 #[derive(Debug)]
 pub struct SpaceProvider {
-    pub chars: HashMap<char, f32>,
+    pub chars: BTreeMap<char, f32>,
 }
 
 pub enum Provider {
@@ -52,7 +53,7 @@ pub enum Provider {
     Space(SpaceProvider),
 }
 
-#[derive(serde_with::DeserializeFromStr, Debug, Clone)]
+#[derive(serde_with::DeserializeFromStr, Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Identifier {
     pub namespace: String,
     pub body: PathBuf,
@@ -65,6 +66,18 @@ impl Identifier {
 
     pub fn vanilla(body: PathBuf) -> Self {
         Self::new(String::from("minecraft"), body)
+    }
+
+    pub fn from_string_unchecked(string: &str) -> Self {
+        let colon_index = string.find(':');
+        let (namespace, body) = match colon_index {
+            None => ("minecraft", string),
+            Some(index) => (&string[..index], &string[index + 1..]),
+        };
+        Self {
+            namespace: String::from(namespace),
+            body: PathBuf::from(body),
+        }
     }
 
     pub fn to_entry(&self, kind: Option<&str>, suffix: Option<&str>) -> PathBuf {
@@ -217,6 +230,10 @@ pub enum ProvidersError {
     Storage(#[from] storage::StorageError),
     #[error(transparent)]
     Jagged(#[from] JaggedArrayError),
+    #[error("Recursive reference")]
+    RecursiveReference,
+    #[error(transparent)]
+    Unihex(#[from] UnihexError),
 }
 
 pub fn image_grid(
@@ -378,7 +395,7 @@ struct JsonBitmapProvider {
 #[derive(serde::Deserialize, Debug)]
 struct JsonSpaceProvider {
     filter: Option<JsonProviderFilter>,
-    advances: HashMap<char, f32>,
+    advances: BTreeMap<char, f32>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -423,13 +440,14 @@ pub enum ForceUniformBehavior {
 }
 
 pub fn load_providers(
-    identifier: &Identifier,
+    identifier: Identifier,
     store: &mut storage::StackStorage,
     options: &impl ProviderOptions,
     behavior: &ProviderBehavior,
+    seen: &mut HashSet<Identifier>,
 ) -> Result<Option<Providers>, ProvidersError> {
     let entry = if options.option_uniform()
-        && matches!(behavior.uniform, ForceUniformBehavior::SwitchIdentifier)
+        && let ForceUniformBehavior::SwitchIdentifier = behavior.uniform
         && identifier.namespace == "minecraft"
         && identifier.body == Path::new("default")
     {
@@ -441,6 +459,7 @@ pub fn load_providers(
     } else {
         identifier.to_entry(Some("font"), Some("json"))
     };
+    seen.insert(identifier);
     match read_stacked_providers(store, &entry) {
         Err(storage::StorageError::FileNotFound) => Ok(None),
         Err(err) => Err(ProvidersError::Storage(err)),
@@ -451,7 +470,7 @@ pub fn load_providers(
                     .get_filter()
                     .is_none_or(|x| passes_filter(options, x))
                 {
-                    let subs = convert_provider(store, options, behavior, single)?;
+                    let subs = convert_provider(store, options, behavior, single, seen)?;
                     converted.extend(subs.providers);
                     times.merge(subs.times);
                 }
@@ -469,12 +488,13 @@ fn convert_provider(
     options: &impl ProviderOptions,
     behavior: &ProviderBehavior,
     provider: JsonProvider,
+    seen: &mut HashSet<Identifier>,
 ) -> Result<Providers, ProvidersError> {
     match provider {
         JsonProvider::Bitmap(bitmap) => {
             let (result, times) = convert_bitmap_provider(store, options, &bitmap)?;
             if options.option_uniform()
-                && matches!(behavior.uniform, ForceUniformBehavior::SkipBitmaps)
+                && let ForceUniformBehavior::SkipBitmaps = behavior.uniform
             {
                 return Ok(Providers {
                     providers: vec![],
@@ -496,12 +516,17 @@ fn convert_provider(
             })
         }
         JsonProvider::Reference(reference) => {
-            let resolved = load_providers(&reference.id, store, options, behavior)?
+            if seen.contains(&reference.id) {
+                return Err(ProvidersError::RecursiveReference);
+            }
+            let resolved = load_providers(reference.id, store, options, behavior, seen)?
                 .ok_or(storage::StorageError::FileNotFound)?;
             Ok(resolved)
         }
         JsonProvider::LegacyUnicode(unicode) => {
-            let sheets = unicode_sheets(&unicode.template, safe_entry);
+            let sheets = unicode_sheets(&unicode.template, |x| {
+                Identifier::from_string_unchecked(&x).to_entry(Some("textures"), None)
+            });
             let (many, times) = legacy_unicode(
                 store,
                 options,
@@ -514,12 +539,15 @@ fn convert_provider(
                 times,
             })
         }
-        JsonProvider::Unihex(unihex) => todo!(),
+        JsonProvider::Unihex(unihex) => {
+            let (result, times) =
+                convert_unihex_provider(store, options, behavior.uneven_unifont, &unihex)?;
+            Ok(Providers {
+                providers: vec![Provider::Bitmap(result)],
+                times,
+            })
+        }
     }
-}
-
-fn safe_entry(identifier: String) -> PathBuf {
-    todo!()
 }
 
 fn convert_bitmap_provider(
@@ -560,6 +588,134 @@ fn convert_bitmap_provider(
     Ok((full, times))
 }
 
+fn convert_unihex_provider(
+    store: &mut impl storage::Storage,
+    options: &impl ProviderOptions,
+    uneven: bool,
+    unihex: &JsonUnihexProvider,
+) -> Result<(BitmapProvider, ModifiedTimes), ProvidersError> {
+    let mut times = ModifiedTimes::default();
+    let zip_entry = unihex.hex_file.to_entry(None, None);
+    let zip_time = store.modified_time(&zip_entry)?;
+    times.update(zip_time);
+    let zip_bytes = store.read(&zip_entry)?;
+    let reader = Cursor::new(zip_bytes);
+    let mut zip = zip::ZipArchive::new(reader).map_err(storage::StorageError::Zip)?;
+    let lines = unihex_lines(&mut zip)?;
+    times.update(lines.modified_time);
+    let mut chars = indexmap::IndexMap::new();
+    for line in &lines.data {
+        let (char, bitmap) = unihex_bitmap(line)?;
+        if !options.include_char(char) || !options.include_unifont_char(char) {
+            continue;
+        }
+        let (left, right) = unifont_char_size(
+            char,
+            &bitmap,
+            unihex.size_overrides.as_ref().unwrap_or(&vec![]).iter(),
+        );
+        let cropped = bitmap.resized(&Rectangle {
+            left: left as usize,
+            top: 0,
+            width: right as usize - left as usize,
+            height: bitmap.height(),
+        });
+        let advance = if uneven {
+            uneven_uniform_advance(&cropped)
+        } else {
+            even_uniform_advance(&cropped)
+        };
+        chars.insert(
+            char,
+            CharBitmap {
+                bitmap,
+                advance,
+                bold_offset: 0.5,
+            },
+        );
+    }
+    let full = BitmapProvider {
+        height: 8,
+        ascent: 7,
+        chars,
+    };
+    Ok((full, times))
+}
+
+fn unifont_char_size<'a>(
+    char: char,
+    bitmap: &Bitmap,
+    overrides: impl Iterator<Item = &'a UnihexSizeOverride>,
+) -> (u32, u32) {
+    for entry in overrides {
+        if char >= entry.from && char <= entry.to {
+            return (entry.left, entry.right + 1);
+        }
+    }
+    match bitmap.content_box() {
+        None => (0, 0),
+        Some(content) => (
+            content.left as u32,
+            content.left as u32 + content.width as u32,
+        ),
+    }
+}
+
+fn unihex_lines(
+    zip: &mut zip::ZipArchive<impl std::io::Read + std::io::Seek>,
+) -> Result<storage::ReadEntry<Vec<String>>, storage::StorageError> {
+    for i in 0..zip.len() {
+        let file = zip.by_index(i)?;
+        if file.name().ends_with(".hex") {
+            let time = storage::zip_time(&file).map_err(storage::StorageError::Time)?;
+            let lines = BufReader::new(file)
+                .lines()
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(storage::ReadEntry {
+                data: lines,
+                modified_time: time,
+            });
+        };
+    }
+    Err(storage::StorageError::FileNotFound)
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum UnihexError {
+    #[error("Missing colon")]
+    MissingColon,
+    #[error(transparent)]
+    Parse(#[from] std::num::ParseIntError),
+    #[error("Invalid character")]
+    InvalidChar,
+    #[error(transparent)]
+    Hex(#[from] hex::FromHexError),
+    #[error("Invalid dimensions")]
+    InvalidDimensions,
+}
+
+fn unihex_bitmap(unihex: &str) -> Result<(char, Bitmap), UnihexError> {
+    let Some(colon_index) = unihex.find(':') else {
+        return Err(UnihexError::MissingColon);
+    };
+    let code_str = &unihex[..colon_index];
+    let art = &unihex[colon_index + 1..];
+    let code = u32::from_str_radix(&code_str, 16)?;
+    let Some(char) = char::from_u32(code) else {
+        return Err(UnihexError::InvalidChar);
+    };
+    let bytes = hex::decode(art)?;
+    let bits = bitmap_ttf::bitvec::vec::BitVec::from_vec(bytes);
+    let Some(bitmap) = (match bits.len() {
+        256 => Bitmap::from_array(8, 16, bits),
+        512 => Bitmap::from_array(16, 16, bits),
+        _ => None,
+    }) else {
+        return Err(UnihexError::InvalidDimensions);
+    };
+    Ok((char, bitmap))
+}
+
 pub fn unicode_sheets(
     template: &str,
     convert: impl Fn(String) -> PathBuf,
@@ -570,7 +726,9 @@ pub fn unicode_sheets(
         let chars = ndarray::Array2::from_shape_fn((16, 16), |(x, y)| {
             char::from_u32(start + (16 * y as u32) + x as u32)
         });
-        let path = template.replace("%x", &format!("{:02x}", sheet_id));
+        let path = template
+            .replace("%s", &format!("{:02x}", sheet_id))
+            .replace("%S", &format!("{:02X}", sheet_id));
         result.push((chars, convert(path)));
     }
     result

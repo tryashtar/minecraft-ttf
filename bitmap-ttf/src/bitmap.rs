@@ -2,7 +2,7 @@ use std::cmp::{max, min};
 
 #[derive(Debug, Hash)]
 pub struct Bitmap {
-    bits: bitvec::vec::BitVec,
+    bits: bitvec::vec::BitVec<u8>,
     width: usize,
     height: usize,
 }
@@ -18,9 +18,21 @@ pub struct Rectangle {
 impl Bitmap {
     pub fn new(width: usize, height: usize) -> Self {
         Self {
-            bits: bitvec::bitvec![0; width * height],
+            bits: bitvec::bitvec![u8, bitvec::order::Lsb0; 0; width * height],
             width,
             height,
+        }
+    }
+
+    pub fn from_array(width: usize, height: usize, bits: bitvec::vec::BitVec<u8>) -> Option<Self> {
+        if width * height == bits.len() {
+            Some(Self {
+                bits,
+                width,
+                height,
+            })
+        } else {
+            None
         }
     }
 

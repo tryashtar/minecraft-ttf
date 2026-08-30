@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     path::{Path, PathBuf},
 };
@@ -60,7 +60,7 @@ impl Display for VanillaFontId {
 pub struct MinecraftVersion {
     pub name: &'static str,
     providers: ProviderSupport,
-    hardcoded_spaces: Option<HashMap<char, f32>>,
+    hardcoded_spaces: Option<BTreeMap<char, f32>>,
     pub asset_mount: PathBuf,
 }
 
@@ -207,10 +207,10 @@ pub fn detect_version(
                 uniform: providers::ForceUniformBehavior::SwitchIdentifier,
                 uneven_unifont: true,
             }),
-            hardcoded_spaces: Some(HashMap::from([(' ', 4.0), ('\u{200c}', 0.0)])),
+            hardcoded_spaces: Some(BTreeMap::from([(' ', 4.0), ('\u{200c}', 0.0)])),
         });
     }
-    let simple_spaces = Some(HashMap::from([(' ', 4.0)]));
+    let simple_spaces = Some(BTreeMap::from([(' ', 4.0)]));
     if version_json
         .pack_version
         .as_ref()
@@ -253,7 +253,7 @@ pub fn detect_version(
         (VanillaFontId::Uniform, None),
     ]);
     let new_unifont = Some(LegacyUnifont {
-        template: String::from("assets/minecraft/textures/font/unicode_page_%x.png"),
+        template: String::from("assets/minecraft/textures/font/unicode_page_%s.png"),
         sizes: PathBuf::from("assets/minecraft/font/glyph_sizes.bin"),
         uneven_spacing: true,
     });
@@ -310,7 +310,7 @@ pub fn detect_version(
                 ]),
                 hardcoded_advances: None,
                 unifont: Some(LegacyUnifont {
-                    template: String::from("font/glyph_%X.png"),
+                    template: String::from("font/glyph_%S.png"),
                     sizes: PathBuf::from("font/glyph_sizes.bin"),
                     uneven_spacing: true,
                 }),
@@ -497,19 +497,25 @@ impl HardcodedCharsBuilder {
 pub fn get_providers(
     version: &MinecraftVersion,
     store: &mut storage::StackStorage,
-    identifier: &providers::Identifier,
+    identifier: providers::Identifier,
     options: &impl providers::ProviderOptions,
 ) -> Result<Option<providers::Providers>, providers::ProvidersError> {
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
     match &version.providers {
         ProviderSupport::Supported(behavior) => {
-            let Some(more) = providers::load_providers(identifier, store, options, behavior)?
+            let Some(real) = providers::load_providers(
+                identifier,
+                store,
+                options,
+                behavior,
+                &mut HashSet::new(),
+            )?
             else {
                 return Ok(None);
             };
-            providers.extend(more.providers);
-            times.merge(more.times);
+            providers.extend(real.providers);
+            times.merge(real.times);
         }
         ProviderSupport::Hardcoded(data) => {
             let HardcodedFont {
@@ -518,7 +524,7 @@ pub fn get_providers(
                 hardcoded_advances,
                 unifont,
             } = Box::as_ref(data);
-            let Ok(vanilla) = TryInto::<VanillaFontId>::try_into(identifier) else {
+            let Ok(vanilla) = TryInto::<VanillaFontId>::try_into(&identifier) else {
                 return Ok(None);
             };
             let Some(texture) = textures.get(&vanilla) else {

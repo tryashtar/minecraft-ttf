@@ -417,12 +417,12 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
         let providers = versions::get_providers(
             &info.version,
             &mut stack,
-            &(*identifier).into(),
+            (*identifier).into(),
             &args.generate_args,
         )?;
         match providers {
             None => {
-                println!("No providers found for {0}", identifier);
+                println!("No providers found for {}", identifier);
             }
             Some(providers) => {}
         }
