@@ -375,7 +375,7 @@ fn load_jar(
 }
 
 fn image_has_color(image: &image::DynamicImage) -> bool {
-    image.pixels().all(|(_, _, pixel)| {
+    !image.pixels().all(|(_, _, pixel)| {
         let [r, g, b, a] = pixel.0;
         a == 0 || (r == 255 && g == 255 && b == 255)
     })

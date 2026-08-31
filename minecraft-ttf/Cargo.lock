@@ -252,6 +252,8 @@ dependencies = [
  "bitvec",
  "jiff",
  "petgraph",
+ "read-fonts",
+ "thiserror",
  "write-fonts",
 ]
 
