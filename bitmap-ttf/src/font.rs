@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 
-use read_fonts::{
-    ps::agl,
-    tables::{
-        cmap::PlatformId,
-        glyf::{Anchor, CurvePoint, Transform},
-    },
+use num_traits::ToPrimitive;
+use read_fonts::tables::{
+    cmap::PlatformId,
+    glyf::{Anchor, CurvePoint, Transform},
 };
 use write_fonts::{
-    BuilderError, FontBuilder, OffsetMarker,
+    FontBuilder, OffsetMarker,
     tables::{
         cmap::{Cmap, Cmap4, Cmap12, CmapSubtable, EncodingRecord, SequentialMapGroup},
         colr::{BaseGlyph, Colr, Layer},
@@ -39,9 +37,9 @@ pub struct GlyphInfo {
 }
 
 impl GlyphInfo {
-    pub fn empty() -> Self {
+    pub fn empty(width: u16) -> Self {
         Self {
-            width: 0,
+            width,
             height: 0,
             base_layer: None,
             base_offsets: vec![],
@@ -59,15 +57,15 @@ pub struct ColoredLayer {
 
 #[derive(Debug)]
 pub struct FontPositions {
-    ascent: f32,
-    descent: f32,
-    s_cap_height: f32,
-    sx_height: f32,
-    y_strikeout_position: f32,
-    y_strikeout_size: f32,
-    underline_position: f32,
-    underline_thickness: f32,
-    italic_angle: f32,
+    ascent: f64,
+    descent: f64,
+    s_cap_height: f64,
+    sx_height: f64,
+    y_strikeout_position: f64,
+    y_strikeout_size: f64,
+    underline_position: f64,
+    underline_thickness: f64,
+    italic_angle: f64,
 }
 
 #[derive(Debug)]
@@ -86,6 +84,12 @@ pub enum MakeFontError {
     Glyph(#[from] write_fonts::error::Error),
     #[error(transparent)]
     Builder(#[from] write_fonts::error::BuilderError),
+    #[error(transparent)]
+    IntCast(#[from] std::num::TryFromIntError),
+    #[error("Converting number")]
+    FloatCast,
+    #[error("Adding number")]
+    IntAdd,
 }
 
 pub fn make_font(
@@ -94,19 +98,6 @@ pub fn make_font(
     chars: &BTreeMap<char, GlyphInfo>,
     notdef: Glyph,
 ) -> Result<Vec<u8>, MakeFontError> {
-    let mut name_buffer = [0; agl::MAX_NAME_LEN];
-    for (char, data) in chars {
-        let name = match agl::char_to_name(*char, &mut name_buffer) {
-            None => {
-                let char_int = *char as u32;
-                match char_int {
-                    0..=0xffff => format!("uni{:04X}", char_int),
-                    _ => format!("u{:X}", char_int),
-                }
-            }
-            Some(name) => name.to_owned(),
-        };
-    }
     let mut builder = FontBuilder::new();
     let (loca_format, widest, tallest) = add_glyphs(&mut builder, chars, &notdef)?;
     add_metrics(&mut builder, info, positions, widest, tallest, loca_format)?;
@@ -188,8 +179,8 @@ struct CmapBuilder {
 
 impl CmapBuilder {
     fn add(&mut self, char: char, glyph_id: u16) {
-        if char as u32 <= 0xffff {
-            self.low_pairs.insert(char as u16, glyph_id);
+        if let Ok(small) = char.try_into() {
+            self.low_pairs.insert(small, glyph_id);
         }
         self.all_pairs.insert(char, glyph_id);
     }
@@ -241,7 +232,11 @@ fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
                 } else {
                     start_code.push(start);
                     end_code.push(last);
-                    id_delta.push((start_glyph as i16) - (start as i16));
+                    id_delta.push(
+                        // "as" is guaranteed to wrap here
+                        // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.numeric.int-same-size
+                        start_glyph.wrapping_sub(start) as i16,
+                    );
                     id_range_offsets.push(0);
                     None
                 }
@@ -251,7 +246,11 @@ fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
     if let Some((start, last, start_glyph)) = current_range {
         start_code.push(start);
         end_code.push(last);
-        id_delta.push((start_glyph as i16) - (start as i16));
+        id_delta.push(
+            // "as" is guaranteed to wrap here
+            // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.numeric.int-same-size
+            start_glyph.wrapping_sub(start) as i16,
+        );
         id_range_offsets.push(0);
         if last < 0xffff {
             start_code.push(0xffff);
@@ -276,15 +275,15 @@ fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
     for (char, glyph) in pairs {
         current_group = match current_group {
             None => Some(SequentialMapGroup {
-                start_char_code: char as u32,
-                end_char_code: char as u32,
-                start_glyph_id: glyph as u32,
+                start_char_code: char.into(),
+                end_char_code: char.into(),
+                start_glyph_id: glyph.into(),
             }),
             Some(group) => {
-                if group.end_char_code + 1 == char as u32 {
+                if group.end_char_code + 1 == char.into() {
                     Some(SequentialMapGroup {
                         start_char_code: group.start_char_code,
-                        end_char_code: char as u32,
+                        end_char_code: char.into(),
                         start_glyph_id: group.start_glyph_id,
                     })
                 } else {
@@ -329,13 +328,11 @@ fn add_glyphs(
                 glyph_builder.add_glyph(&cloned)?
             }
             (Some(layer), [(x, y), rest @ ..]) => {
-                let base_index = chars.len() + component_pieces.len();
-                let (component, bbox) =
-                    make_offset_component(base_index as u16, *x, *y, layer.bbox);
+                let base_index: u16 = (chars.len() + component_pieces.len()).try_into()?;
+                let (component, bbox) = make_offset_component(base_index, *x, *y, layer.bbox);
                 let mut composite = CompositeGlyph::new(component, bbox);
                 for (x, y) in rest {
-                    let (component, bbox) =
-                        make_offset_component(base_index as u16, *x, *y, layer.bbox);
+                    let (component, bbox) = make_offset_component(base_index, *x, *y, layer.bbox);
                     composite.add_component(component, bbox);
                 }
                 component_pieces.push(layer);
@@ -352,21 +349,24 @@ fn add_glyphs(
     }
     let mut next_color_index = 0u16;
     for (main_index, layers, offsets) in color_pieces {
-        let num_layers = (layers.len() * offsets.len()) as u16;
+        let num_layers: u16 = (layers.len() * offsets.len()).try_into()?;
         color_base_records.push(BaseGlyph {
             glyph_id: GlyphId16::new(main_index),
             first_layer_index: next_color_index,
             num_layers,
         });
-        next_color_index += num_layers;
+        next_color_index = next_color_index
+            .checked_add(num_layers)
+            .ok_or(MakeFontError::IntAdd)?;
         for layer in layers.iter() {
-            let palette_index = match palettes.iter().position(|x| x == &layer.color) {
+            let palette_index: u16 = match palettes.iter().position(|x| x == &layer.color) {
                 None => {
                     palettes.push(layer.color.clone());
                     palettes.len() - 1
                 }
                 Some(index) => index,
-            } as u16;
+            }
+            .try_into()?;
             for (x, y) in offsets.iter() {
                 let mut cloned = layer.glyph.clone();
                 translate_glyph(&mut cloned, *x, *y);
@@ -387,18 +387,18 @@ fn add_glyphs(
         .add_table(&cmap)?;
     if !palettes.is_empty() {
         let cpal = Cpal::new(
-            palettes.len() as u16,
+            palettes.len().try_into()?,
             1,
-            palettes.len() as u16,
+            palettes.len().try_into()?,
             Some(palettes),
             vec![0],
         );
-        let color_layer_len = color_layer_records.len();
+        let color_layer_len = color_layer_records.len().try_into()?;
         let colr = Colr::new(
-            color_base_records.len() as u16,
+            color_base_records.len().try_into()?,
             Some(color_base_records),
             Some(color_layer_records),
-            color_layer_len as u16,
+            color_layer_len,
         );
         builder.add_table(&cpal)?.add_table(&colr)?;
     }
@@ -412,13 +412,22 @@ fn add_metrics(
     widest: i16,
     tallest: i16,
     loca_format: LocaFormat,
-) -> Result<(), BuilderError> {
+) -> Result<(), MakeFontError> {
     let names = info.names.into_table();
-    let ascent = (info.em as f32 * positions.ascent) as u16;
-    let descent = (info.em as f32 * positions.descent) as u16;
+    let em: f64 = info.em.into();
+    let ascent: u16 = (em * positions.ascent)
+        .round()
+        .to_u16()
+        .ok_or(MakeFontError::FloatCast)?;
+    let descent: u16 = (em * positions.descent)
+        .round()
+        .to_u16()
+        .ok_or(MakeFontError::FloatCast)?;
+    let signed_ascent: i16 = ascent.try_into()?;
+    let signed_descent: i16 = descent.try_into()?;
     let hhea = Hhea {
-        ascender: FWord::new(ascent as i16),
-        descender: FWord::new(-(descent as i16)),
+        ascender: FWord::new(signed_ascent),
+        descender: FWord::new(-signed_descent),
         ..Default::default()
     };
     let (fs_selection, mac_style) = match (info.bold, info.italic) {
@@ -435,24 +444,50 @@ fn add_metrics(
     };
     let weight = if info.bold { 700 } else { 400 };
     let os2 = Os2 {
-        s_typo_ascender: ascent as i16,
-        s_typo_descender: -(descent as i16),
+        s_typo_ascender: signed_ascent,
+        s_typo_descender: -signed_descent,
         us_win_ascent: ascent,
         us_win_descent: descent,
-        s_cap_height: Some((info.em as f32 * positions.s_cap_height) as i16),
-        sx_height: Some((info.em as f32 * positions.sx_height) as i16),
-        y_strikeout_position: (info.em as f32 * positions.y_strikeout_position) as i16,
-        y_strikeout_size: (info.em as f32 * positions.y_strikeout_size) as i16,
+        s_cap_height: Some(
+            (em * positions.s_cap_height)
+                .round()
+                .to_i16()
+                .ok_or(MakeFontError::FloatCast)?,
+        ),
+        sx_height: Some(
+            (em * positions.sx_height)
+                .round()
+                .to_i16()
+                .ok_or(MakeFontError::FloatCast)?,
+        ),
+        y_strikeout_position: (em * positions.y_strikeout_position)
+            .round()
+            .to_i16()
+            .ok_or(MakeFontError::FloatCast)?,
+        y_strikeout_size: (em * positions.y_strikeout_size)
+            .round()
+            .to_i16()
+            .ok_or(MakeFontError::FloatCast)?,
         s_typo_line_gap: 0,
         fs_selection,
         us_weight_class: weight,
         ..Default::default()
     };
     let post = Post {
-        underline_position: FWord::new((info.em as f32 * positions.underline_position) as i16),
-        underline_thickness: FWord::new((info.em as f32 * positions.underline_thickness) as i16),
+        underline_position: FWord::new(
+            (em * positions.underline_position)
+                .round()
+                .to_i16()
+                .ok_or(MakeFontError::FloatCast)?,
+        ),
+        underline_thickness: FWord::new(
+            (em * positions.underline_thickness)
+                .round()
+                .to_i16()
+                .ok_or(MakeFontError::FloatCast)?,
+        ),
         italic_angle: Fixed::from_f64(if info.italic {
-            positions.italic_angle as f64
+            positions.italic_angle
         } else {
             0.0
         }),
@@ -463,11 +498,13 @@ fn add_metrics(
         units_per_em: info.em,
         x_min: 0,
         x_max: widest,
-        y_min: -(descent as i16),
+        y_min: -signed_descent,
         y_max: tallest,
         created: LongDateTime::new(info.created.as_second() - epoch.as_second()),
         modified: LongDateTime::new(info.modified.as_second() - epoch.as_second()),
         mac_style,
+        // enum cast
+        // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.enum.discriminant
         index_to_loc_format: loca_format as i16,
         ..Default::default()
     };
@@ -512,7 +549,7 @@ impl Names {
             encoding_id: 1,
             language_id: 0x0409,
             name_id: id,
-            string: OffsetMarker::new(value.clone()),
+            string: OffsetMarker::new(value),
         });
     }
 }

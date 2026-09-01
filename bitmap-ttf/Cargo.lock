@@ -26,6 +26,7 @@ version = "0.1.0"
 dependencies = [
  "bitvec",
  "jiff",
+ "num-traits",
  "petgraph",
  "read-fonts",
  "thiserror",

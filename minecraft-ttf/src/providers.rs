@@ -722,7 +722,7 @@ pub fn unicode_sheets(
 ) -> Vec<(ndarray::Array2<Option<char>>, PathBuf)> {
     let mut result = vec![];
     for sheet_id in 0u8..=0xffu8 {
-        let start = (sheet_id as u32) * 256;
+        let start: u32 = Into::<u32>::into(sheet_id) * 256;
         let chars = ndarray::Array2::from_shape_fn((16, 16), |(x, y)| {
             char::from_u32(start + (16 * y as u32) + x as u32)
         });
@@ -748,14 +748,12 @@ pub fn legacy_unicode<'a>(
     let size_bytes = store.read(sizes)?;
     let size_dict = size_bytes
         .into_iter()
-        .enumerate()
-        .filter_map(|(index, byte)| {
-            char::from_u32(index as u32).map(|char| {
-                (
-                    char,
-                    (((byte >> 4) & 0xf) as u32, ((byte & 0xf) + 1) as u32),
-                )
-            })
+        .zip('\0'..)
+        .map(|(byte, char)| {
+            (
+                char,
+                (((byte >> 4) & 0xf).into(), ((byte & 0xf) + 1).into()),
+            )
         })
         .collect();
     for (chars, sheet_path) in sheets {

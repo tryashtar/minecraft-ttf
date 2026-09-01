@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use petgraph::{Directed, Graph, algo::tarjan_scc, graph::NodeIndex};
+use read_fonts::tables::glyf::CurvePoint;
+use write_fonts::tables::glyf::{Bbox, Contour, SimpleGlyph};
 
 use crate::bitmap::Bitmap;
 
 pub type BitmapGraph = Graph<(usize, usize), (), Directed>;
 
-pub fn bitmap_to_graph(bitmap: &Bitmap) -> BitmapGraph {
+fn bitmap_to_graph(bitmap: &Bitmap) -> BitmapGraph {
     let mut graph = Graph::new();
     let mut nodes: HashMap<(usize, usize), NodeIndex> = HashMap::new();
     let mut get_node = |graph: &mut Graph<_, _, _>, x: usize, y: usize| -> NodeIndex {
@@ -44,7 +46,7 @@ fn swap_pair<A, B>(tuple: (A, B)) -> (B, A) {
     (b, a)
 }
 
-pub fn trace(graph: &BitmapGraph) -> Vec<VecDeque<(usize, usize)>> {
+fn trace(graph: &BitmapGraph) -> Vec<Vec<(usize, usize)>> {
     let components = tarjan_scc(graph);
     let mut result = vec![];
     for component in components {
@@ -98,4 +100,85 @@ fn hierholzer_euler_circuit(
         }
     }
     circuit
+}
+
+#[derive(Debug)]
+pub struct TracePen {
+    height: u32,
+    scale: f64,
+    offset: (f64, f64),
+    shear: Option<f64>,
+    path: Vec<CurvePoint>,
+}
+
+impl TracePen {
+    fn convert_point(&self, point: (usize, usize)) -> CurvePoint {
+        todo!()
+    }
+
+    fn start(&mut self, point: (usize, usize)) {
+        self.path = vec![self.convert_point(point)];
+    }
+
+    fn line(&mut self, point: (usize, usize)) {
+        let converted = self.convert_point(point);
+        if let Some([p1, p2]) = self.path.last_chunk_mut::<2>()
+            && collinear(p1, p2, &converted)
+        {
+            *p2 = converted;
+        } else {
+            self.path.push(converted);
+        }
+    }
+
+    fn done(&mut self) -> Vec<CurvePoint> {
+        if let Some(point) = self.path.first() {
+            self.path.push(point.clone());
+        }
+        self.path.drain(..).collect()
+    }
+}
+
+fn collinear(p1: &CurvePoint, p2: &CurvePoint, p3: &CurvePoint) -> bool {
+    let (x1, y1) = (p2.x - p1.x, p2.y - p1.y);
+    let (x2, y2) = (p3.x - p1.x, p3.y - p1.y);
+    (x1 * y2) == (x2 * y1)
+}
+
+fn trace_paths(
+    pen: &mut TracePen,
+    paths: impl Iterator<Item = impl Iterator<Item = (usize, usize)>>,
+) -> Vec<Contour> {
+    let mut contours = vec![];
+    for mut path in paths {
+        if let Some(first) = path.next() {
+            pen.start(first);
+            for next in path {
+                pen.line(next);
+            }
+            let contour = pen.done();
+            contours.push(Contour::from(contour));
+        }
+    }
+    contours
+}
+
+pub fn full_glyph(
+    bitmap: &Bitmap,
+    pen: &mut TracePen,
+) -> Result<SimpleGlyph, std::num::TryFromIntError> {
+    let graph = bitmap_to_graph(bitmap);
+    let paths = trace(&graph);
+    let contours = trace_paths(pen, paths.iter().map(|x| x.iter().copied()));
+    Ok(SimpleGlyph {
+        bbox: Bbox {
+            x_min: 0,
+            y_min: 0,
+            x_max: bitmap.width().try_into()?,
+            y_max: bitmap.height().try_into()?,
+        },
+        contours,
+        instructions: vec![],
+        overlaps: false,
+    })
 }

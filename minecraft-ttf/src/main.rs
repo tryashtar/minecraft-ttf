@@ -6,6 +6,8 @@ use std::{
     str::FromStr,
 };
 
+use bitmap_ttf::font::make_font;
+use clap::Parser;
 use image::GenericImageView;
 use tracing::error;
 use tracing_subscriber::layer::SubscriberExt;
@@ -139,7 +141,12 @@ impl CharRange {
 impl Display for CharRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, range) in self.ranges.iter().enumerate() {
-            write!(f, "{0:x}-{1:x}", range.start as u32, range.last as u32)?;
+            write!(
+                f,
+                "{0:x}-{1:x}",
+                Into::<u32>::into(range.start),
+                Into::<u32>::into(range.last)
+            )?;
             if i < self.ranges.len() - 1 {
                 write!(f, ",")?;
             }
@@ -284,7 +291,7 @@ struct GenerateArgs {
 
 fn main() -> ExitCode {
     setup_logging();
-    let cli = <Cli as clap::Parser>::parse();
+    let cli = Cli::parse();
     let result = run(cli.command);
     match result {
         Ok(()) => ExitCode::SUCCESS,
