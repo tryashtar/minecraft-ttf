@@ -2,12 +2,15 @@ use std::collections::BTreeMap;
 
 use read_fonts::{
     ps::agl,
-    tables::glyf::{Anchor, CurvePoint, Transform},
+    tables::{
+        cmap::PlatformId,
+        glyf::{Anchor, CurvePoint, Transform},
+    },
 };
 use write_fonts::{
     BuilderError, FontBuilder, OffsetMarker,
     tables::{
-        cmap::Cmap,
+        cmap::{Cmap, Cmap4, Cmap12, CmapSubtable, EncodingRecord, SequentialMapGroup},
         colr::{BaseGlyph, Colr, Layer},
         cpal::{ColorRecord, Cpal},
         glyf::{
@@ -177,17 +180,140 @@ impl GlyphBuilder {
     }
 }
 
+#[derive(Debug, Default)]
+struct CmapBuilder {
+    low_pairs: BTreeMap<u16, u16>,
+    all_pairs: BTreeMap<char, u16>,
+}
+
+impl CmapBuilder {
+    fn add(&mut self, char: char, glyph_id: u16) {
+        if char as u32 <= 0xffff {
+            self.low_pairs.insert(char as u16, glyph_id);
+        }
+        self.all_pairs.insert(char, glyph_id);
+    }
+
+    fn build(&self) -> Cmap {
+        let mut records = vec![];
+        if !self.low_pairs.is_empty() {
+            let cmap4 = build_cmap4(self.low_pairs.iter().map(|(a, b)| (*a, *b)));
+            records.push(EncodingRecord::new(
+                PlatformId::Unicode,
+                3,
+                CmapSubtable::Format4(cmap4.clone()),
+            ));
+            records.push(EncodingRecord::new(
+                PlatformId::Windows,
+                1,
+                CmapSubtable::Format4(cmap4),
+            ));
+        }
+        if self.all_pairs.len() > self.low_pairs.len() {
+            let cmap12 = build_cmap12(self.all_pairs.iter().map(|(a, b)| (*a, *b)));
+            records.push(EncodingRecord::new(
+                PlatformId::Unicode,
+                3,
+                CmapSubtable::Format12(cmap12.clone()),
+            ));
+            records.push(EncodingRecord::new(
+                PlatformId::Windows,
+                1,
+                CmapSubtable::Format12(cmap12),
+            ));
+        }
+        Cmap::new(records)
+    }
+}
+
+fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
+    let mut start_code = vec![];
+    let mut end_code = vec![];
+    let mut id_delta = vec![];
+    let mut id_range_offsets = vec![];
+    let mut current_range = None;
+    for (char, glyph) in pairs {
+        current_range = match current_range {
+            None => Some((char, char, glyph)),
+            Some((start, last, start_glyph)) => {
+                if last + 1 == char {
+                    Some((start, char, start_glyph))
+                } else {
+                    start_code.push(start);
+                    end_code.push(last);
+                    id_delta.push((start_glyph as i16) - (start as i16));
+                    id_range_offsets.push(0);
+                    None
+                }
+            }
+        };
+    }
+    if let Some((start, last, start_glyph)) = current_range {
+        start_code.push(start);
+        end_code.push(last);
+        id_delta.push((start_glyph as i16) - (start as i16));
+        id_range_offsets.push(0);
+        if last < 0xffff {
+            start_code.push(0xffff);
+            end_code.push(0xffff);
+            id_delta.push(1);
+            id_range_offsets.push(0);
+        }
+    }
+    Cmap4 {
+        language: 0,
+        end_code,
+        start_code,
+        id_delta,
+        id_range_offsets,
+        glyph_id_array: vec![],
+    }
+}
+
+fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
+    let mut groups = vec![];
+    let mut current_group = None;
+    for (char, glyph) in pairs {
+        current_group = match current_group {
+            None => Some(SequentialMapGroup {
+                start_char_code: char as u32,
+                end_char_code: char as u32,
+                start_glyph_id: glyph as u32,
+            }),
+            Some(group) => {
+                if group.end_char_code + 1 == char as u32 {
+                    Some(SequentialMapGroup {
+                        start_char_code: group.start_char_code,
+                        end_char_code: char as u32,
+                        start_glyph_id: group.start_glyph_id,
+                    })
+                } else {
+                    groups.push(group);
+                    None
+                }
+            }
+        };
+    }
+    if let Some(group) = current_group {
+        groups.push(group);
+    }
+    Cmap12 {
+        language: 0,
+        groups,
+    }
+}
+
 fn add_glyphs(
     builder: &mut FontBuilder,
     chars: &BTreeMap<char, GlyphInfo>,
     notdef: &Glyph,
 ) -> Result<(LocaFormat, i16, i16), MakeFontError> {
     let mut glyph_builder = GlyphBuilder::default();
+    let mut cmap_builder = CmapBuilder::default();
     let mut hmtx = Hmtx::default();
     let mut palettes = vec![];
     let mut color_base_records = vec![];
     let mut color_layer_records = vec![];
-    let mut cmap = Cmap::default();
     let mut widest = 0i16;
     let mut tallest = 0i16;
     glyph_builder.add_glyph(notdef)?;
@@ -219,6 +345,7 @@ fn add_glyphs(
         if !info.colored_layers.is_empty() {
             color_pieces.push((glyph_index, &info.colored_layers, &info.colored_offsets));
         }
+        cmap_builder.add(*char, glyph_index);
     }
     for glyph in component_pieces {
         glyph_builder.add_glyph(glyph)?;
@@ -252,10 +379,12 @@ fn add_glyphs(
         }
     }
     let (glyf, loca, loca_format) = glyph_builder.builder.build();
+    let cmap = cmap_builder.build();
     builder
         .add_table(&glyf)?
         .add_table(&loca)?
-        .add_table(&hmtx)?;
+        .add_table(&hmtx)?
+        .add_table(&cmap)?;
     if !palettes.is_empty() {
         let cpal = Cpal::new(
             palettes.len() as u16,
@@ -384,13 +513,6 @@ impl Names {
             language_id: 0x0409,
             name_id: id,
             string: OffsetMarker::new(value.clone()),
-        });
-        names.push(NameRecord {
-            platform_id: 1,
-            encoding_id: 0,
-            language_id: 0,
-            name_id: id,
-            string: OffsetMarker::new(value),
         });
     }
 }
