@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use num_traits::ToPrimitive;
 use read_fonts::tables::{
     cmap::PlatformId,
@@ -22,18 +20,19 @@ use write_fonts::{
         name::{Name, NameRecord},
         os2::{Os2, SelectionFlags},
         post::Post,
+        vmtx::LongMetric,
     },
     types::{FWord, Fixed, GlyphId16, LongDateTime, NameId},
 };
 
 #[derive(Debug, PartialEq)]
 pub struct GlyphInfo {
-    width: u16,
-    height: u16,
-    base_layer: Option<SimpleGlyph>,
-    base_offsets: Vec<(i16, i16)>,
-    colored_layers: Vec<ColoredLayer>,
-    colored_offsets: Vec<(i16, i16)>,
+    pub width: u16,
+    pub height: u16,
+    pub base_layer: Option<SimpleGlyph>,
+    pub base_offsets: Vec<(i16, i16)>,
+    pub colored_layers: Vec<ColoredLayer>,
+    pub colored_offsets: Vec<(i16, i16)>,
 }
 
 impl GlyphInfo {
@@ -51,31 +50,31 @@ impl GlyphInfo {
 
 #[derive(Debug, PartialEq)]
 pub struct ColoredLayer {
-    glyph: SimpleGlyph,
-    color: ColorRecord,
+    pub glyph: SimpleGlyph,
+    pub color: ColorRecord,
 }
 
 #[derive(Debug)]
 pub struct FontPositions {
-    ascent: f64,
-    descent: f64,
-    s_cap_height: f64,
-    sx_height: f64,
-    y_strikeout_position: f64,
-    y_strikeout_size: f64,
-    underline_position: f64,
-    underline_thickness: f64,
-    italic_angle: f64,
+    pub ascent: f64,
+    pub descent: f64,
+    pub s_cap_height: f64,
+    pub sx_height: f64,
+    pub y_strikeout_position: f64,
+    pub y_strikeout_size: f64,
+    pub underline_position: f64,
+    pub underline_thickness: f64,
+    pub italic_angle: f64,
 }
 
 #[derive(Debug)]
-pub struct FontInfo {
-    names: Names,
-    bold: bool,
-    italic: bool,
-    em: u16,
-    created: jiff::Timestamp,
-    modified: jiff::Timestamp,
+pub struct FontMeta {
+    pub names: Names,
+    pub bold: bool,
+    pub italic: bool,
+    pub em: u16,
+    pub created: jiff::Timestamp,
+    pub modified: jiff::Timestamp,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -85,7 +84,15 @@ pub enum MakeFontError {
     #[error(transparent)]
     Builder(#[from] write_fonts::error::BuilderError),
     #[error(transparent)]
+    Coords(#[from] CoordsError),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum CoordsError {
+    #[error(transparent)]
     IntCast(#[from] std::num::TryFromIntError),
+    #[error("Converting number")]
+    SizeCast,
     #[error("Converting number")]
     FloatCast,
     #[error("Adding number")]
@@ -93,14 +100,14 @@ pub enum MakeFontError {
 }
 
 pub fn make_font(
-    info: FontInfo,
+    meta: FontMeta,
     positions: &FontPositions,
-    chars: &BTreeMap<char, GlyphInfo>,
-    notdef: Glyph,
+    chars: &indexmap::IndexMap<char, GlyphInfo>,
+    notdef: &Glyph,
 ) -> Result<Vec<u8>, MakeFontError> {
     let mut builder = FontBuilder::new();
-    let (loca_format, widest, tallest) = add_glyphs(&mut builder, chars, &notdef)?;
-    add_metrics(&mut builder, info, positions, widest, tallest, loca_format)?;
+    let (loca_format, widest, tallest) = add_glyphs(&mut builder, chars, notdef)?;
+    add_metrics(&mut builder, meta, positions, widest, tallest, loca_format)?;
     Ok(builder.build())
 }
 
@@ -173,8 +180,8 @@ impl GlyphBuilder {
 
 #[derive(Debug, Default)]
 struct CmapBuilder {
-    low_pairs: BTreeMap<u16, u16>,
-    all_pairs: BTreeMap<char, u16>,
+    low_pairs: indexmap::IndexMap<u16, u16>,
+    all_pairs: indexmap::IndexMap<char, u16>,
 }
 
 impl CmapBuilder {
@@ -302,9 +309,36 @@ fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
     }
 }
 
+#[derive(Debug)]
+struct GlyphSize {
+    start: (i16, i16),
+    largest: (i16, i16),
+}
+
+impl GlyphSize {
+    fn new(size: (u16, u16)) -> Result<Self, CoordsError> {
+        let (x, y) = size;
+        let size = (x.try_into()?, y.try_into()?);
+        Ok(Self {
+            start: size,
+            largest: size,
+        })
+    }
+
+    fn update(&mut self, offset: (i16, i16)) -> Result<(), CoordsError> {
+        let (x, y) = self.start;
+        let (ox, oy) = offset;
+        let width = x.checked_add(ox).ok_or(CoordsError::IntAdd)?;
+        let height = y.checked_add(oy).ok_or(CoordsError::IntAdd)?;
+        let (px, py) = self.largest;
+        self.largest = (px.max(width), py.max(height));
+        Ok(())
+    }
+}
+
 fn add_glyphs(
     builder: &mut FontBuilder,
-    chars: &BTreeMap<char, GlyphInfo>,
+    chars: &indexmap::IndexMap<char, GlyphInfo>,
     notdef: &Glyph,
 ) -> Result<(LocaFormat, i16, i16), MakeFontError> {
     let mut glyph_builder = GlyphBuilder::default();
@@ -319,19 +353,25 @@ fn add_glyphs(
     let mut component_pieces = vec![];
     let mut color_pieces = vec![];
     for (char, info) in chars.iter() {
+        let mut size = GlyphSize::new((info.width, info.height))?;
         let glyph_index = match (&info.base_layer, info.base_offsets.as_slice()) {
             (None, _) | (_, []) => glyph_builder.add_glyph(&Glyph::Empty)?,
             (Some(layer), [(0, 0)]) => glyph_builder.add_glyph(layer)?,
             (Some(layer), [(x, y)]) => {
+                size.update((*x, *y))?;
                 let mut cloned = layer.clone();
                 translate_glyph(&mut cloned, *x, *y);
                 glyph_builder.add_glyph(&cloned)?
             }
             (Some(layer), [(x, y), rest @ ..]) => {
-                let base_index: u16 = (chars.len() + component_pieces.len()).try_into()?;
+                size.update((*x, *y))?;
+                let base_index = (chars.len() + component_pieces.len())
+                    .to_u16()
+                    .ok_or(CoordsError::SizeCast)?;
                 let (component, bbox) = make_offset_component(base_index, *x, *y, layer.bbox);
                 let mut composite = CompositeGlyph::new(component, bbox);
                 for (x, y) in rest {
+                    size.update((*x, *y))?;
                     let (component, bbox) = make_offset_component(base_index, *x, *y, layer.bbox);
                     composite.add_component(component, bbox);
                 }
@@ -343,13 +383,22 @@ fn add_glyphs(
             color_pieces.push((glyph_index, &info.colored_layers, &info.colored_offsets));
         }
         cmap_builder.add(*char, glyph_index);
+        let (width, height) = size.largest;
+        widest = widest.max(width);
+        tallest = widest.max(height);
+        hmtx.h_metrics.push(LongMetric {
+            advance: width.try_into().map_err(CoordsError::IntCast)?,
+            side_bearing: 0,
+        });
     }
     for glyph in component_pieces {
         glyph_builder.add_glyph(glyph)?;
     }
     let mut next_color_index = 0u16;
     for (main_index, layers, offsets) in color_pieces {
-        let num_layers: u16 = (layers.len() * offsets.len()).try_into()?;
+        let num_layers = (layers.len() * offsets.len())
+            .to_u16()
+            .ok_or(CoordsError::SizeCast)?;
         color_base_records.push(BaseGlyph {
             glyph_id: GlyphId16::new(main_index),
             first_layer_index: next_color_index,
@@ -357,16 +406,17 @@ fn add_glyphs(
         });
         next_color_index = next_color_index
             .checked_add(num_layers)
-            .ok_or(MakeFontError::IntAdd)?;
+            .ok_or(CoordsError::IntAdd)?;
         for layer in layers.iter() {
-            let palette_index: u16 = match palettes.iter().position(|x| x == &layer.color) {
+            let palette_index = match palettes.iter().position(|x| x == &layer.color) {
                 None => {
                     palettes.push(layer.color.clone());
                     palettes.len() - 1
                 }
                 Some(index) => index,
             }
-            .try_into()?;
+            .to_u16()
+            .ok_or(CoordsError::SizeCast)?;
             for (x, y) in offsets.iter() {
                 let mut cloned = layer.glyph.clone();
                 translate_glyph(&mut cloned, *x, *y);
@@ -387,15 +437,21 @@ fn add_glyphs(
         .add_table(&cmap)?;
     if !palettes.is_empty() {
         let cpal = Cpal::new(
-            palettes.len().try_into()?,
+            palettes.len().to_u16().ok_or(CoordsError::SizeCast)?,
             1,
-            palettes.len().try_into()?,
+            palettes.len().to_u16().ok_or(CoordsError::SizeCast)?,
             Some(palettes),
             vec![0],
         );
-        let color_layer_len = color_layer_records.len().try_into()?;
+        let color_layer_len = color_layer_records
+            .len()
+            .to_u16()
+            .ok_or(CoordsError::SizeCast)?;
         let colr = Colr::new(
-            color_base_records.len().try_into()?,
+            color_base_records
+                .len()
+                .to_u16()
+                .ok_or(CoordsError::SizeCast)?,
             Some(color_base_records),
             Some(color_layer_records),
             color_layer_len,
@@ -407,30 +463,30 @@ fn add_glyphs(
 
 fn add_metrics(
     builder: &mut FontBuilder,
-    info: FontInfo,
+    meta: FontMeta,
     positions: &FontPositions,
     widest: i16,
     tallest: i16,
     loca_format: LocaFormat,
 ) -> Result<(), MakeFontError> {
-    let names = info.names.into_table();
-    let em: f64 = info.em.into();
-    let ascent: u16 = (em * positions.ascent)
+    let names = meta.names.into_table();
+    let em: f64 = meta.em.into();
+    let ascent = (em * positions.ascent)
         .round()
         .to_u16()
-        .ok_or(MakeFontError::FloatCast)?;
-    let descent: u16 = (em * positions.descent)
+        .ok_or(CoordsError::FloatCast)?;
+    let descent = (em * positions.descent)
         .round()
         .to_u16()
-        .ok_or(MakeFontError::FloatCast)?;
-    let signed_ascent: i16 = ascent.try_into()?;
-    let signed_descent: i16 = descent.try_into()?;
+        .ok_or(CoordsError::FloatCast)?;
+    let signed_ascent: i16 = ascent.try_into().map_err(CoordsError::IntCast)?;
+    let signed_descent: i16 = descent.try_into().map_err(CoordsError::IntCast)?;
     let hhea = Hhea {
         ascender: FWord::new(signed_ascent),
         descender: FWord::new(-signed_descent),
         ..Default::default()
     };
-    let (fs_selection, mac_style) = match (info.bold, info.italic) {
+    let (fs_selection, mac_style) = match (meta.bold, meta.italic) {
         (true, true) => (
             SelectionFlags::BOLD | SelectionFlags::ITALIC,
             MacStyle::BOLD | MacStyle::ITALIC,
@@ -442,7 +498,7 @@ fn add_metrics(
         ),
         (false, false) => (SelectionFlags::REGULAR, MacStyle::empty()),
     };
-    let weight = if info.bold { 700 } else { 400 };
+    let weight = if meta.bold { 700 } else { 400 };
     let os2 = Os2 {
         s_typo_ascender: signed_ascent,
         s_typo_descender: -signed_descent,
@@ -452,22 +508,22 @@ fn add_metrics(
             (em * positions.s_cap_height)
                 .round()
                 .to_i16()
-                .ok_or(MakeFontError::FloatCast)?,
+                .ok_or(CoordsError::FloatCast)?,
         ),
         sx_height: Some(
             (em * positions.sx_height)
                 .round()
                 .to_i16()
-                .ok_or(MakeFontError::FloatCast)?,
+                .ok_or(CoordsError::FloatCast)?,
         ),
         y_strikeout_position: (em * positions.y_strikeout_position)
             .round()
             .to_i16()
-            .ok_or(MakeFontError::FloatCast)?,
+            .ok_or(CoordsError::FloatCast)?,
         y_strikeout_size: (em * positions.y_strikeout_size)
             .round()
             .to_i16()
-            .ok_or(MakeFontError::FloatCast)?,
+            .ok_or(CoordsError::FloatCast)?,
         s_typo_line_gap: 0,
         fs_selection,
         us_weight_class: weight,
@@ -478,15 +534,15 @@ fn add_metrics(
             (em * positions.underline_position)
                 .round()
                 .to_i16()
-                .ok_or(MakeFontError::FloatCast)?,
+                .ok_or(CoordsError::FloatCast)?,
         ),
         underline_thickness: FWord::new(
             (em * positions.underline_thickness)
                 .round()
                 .to_i16()
-                .ok_or(MakeFontError::FloatCast)?,
+                .ok_or(CoordsError::FloatCast)?,
         ),
-        italic_angle: Fixed::from_f64(if info.italic {
+        italic_angle: Fixed::from_f64(if meta.italic {
             positions.italic_angle
         } else {
             0.0
@@ -495,13 +551,13 @@ fn add_metrics(
     };
     let epoch = jiff::Timestamp::constant(-2_082_844_800, 0);
     let head = Head {
-        units_per_em: info.em,
+        units_per_em: meta.em,
         x_min: 0,
         x_max: widest,
         y_min: -signed_descent,
         y_max: tallest,
-        created: LongDateTime::new(info.created.as_second() - epoch.as_second()),
-        modified: LongDateTime::new(info.modified.as_second() - epoch.as_second()),
+        created: LongDateTime::new(meta.created.as_second() - epoch.as_second()),
+        modified: LongDateTime::new(meta.modified.as_second() - epoch.as_second()),
         mac_style,
         // enum cast
         // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.enum.discriminant
@@ -518,15 +574,15 @@ fn add_metrics(
 }
 
 #[derive(Debug)]
-struct Names {
-    copyright: String,
-    family: String,
-    style: String,
-    unique: String,
-    full: String,
-    version: String,
-    postscript: String,
-    sample: String,
+pub struct Names {
+    pub copyright: String,
+    pub family: String,
+    pub style: String,
+    pub unique: String,
+    pub full: String,
+    pub version: String,
+    pub postscript: String,
+    pub sample: String,
 }
 
 impl Names {

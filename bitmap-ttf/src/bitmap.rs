@@ -93,13 +93,17 @@ impl Bitmap {
             height,
         } = bounds;
         let mut result = Bitmap::new(*width, *height);
-        for y in *top..min(*top + *height, self.height) {
-            for x in *left..min(*left + *width, self.width) {
-                if self.get(x, y) {
-                    result.set(x, y, true);
+        result.draw(self, *left, *top);
+        result
+    }
+
+    pub fn draw(&mut self, other: &Bitmap, left: usize, top: usize) {
+        for y in top..min(top + other.height(), self.height) {
+            for x in left..min(left + other.width(), self.width) {
+                if other.get(x, y) {
+                    self.set(x, y, true);
                 }
             }
         }
-        result
     }
 }

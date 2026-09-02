@@ -250,6 +250,7 @@ name = "bitmap-ttf"
 version = "0.1.0"
 dependencies = [
  "bitvec",
+ "indexmap 2.14.1",
  "jiff",
  "num-traits",
  "petgraph",
@@ -969,7 +970,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http",
- "indexmap 2.14.0",
+ "indexmap 2.14.1",
  "slab",
  "tokio",
  "tokio-util",
@@ -1325,9 +1326,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.14.0"
+version = "2.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
+checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
@@ -1642,9 +1643,10 @@ dependencies = [
  "clap",
  "hex",
  "image",
- "indexmap 2.14.0",
+ "indexmap 2.14.1",
  "jiff",
  "ndarray",
+ "num-traits",
  "reqwest",
  "serde",
  "serde_json",
@@ -1863,7 +1865,7 @@ checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
- "indexmap 2.14.0",
+ "indexmap 2.14.1",
  "serde",
 ]
 
@@ -2577,7 +2579,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.14.0",
+ "indexmap 2.14.1",
  "jiff",
  "schemars 0.9.0",
  "schemars 1.2.2",
@@ -3407,7 +3409,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843cebb7bd36359861dbce43d54ac8b33dfdf7b80a95913adc1ef7c7bb881e62"
 dependencies = [
  "font-types",
- "indexmap 2.14.0",
+ "indexmap 2.14.1",
  "kurbo",
  "log",
  "read-fonts",
@@ -3551,7 +3553,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "hmac",
- "indexmap 2.14.0",
+ "indexmap 2.14.1",
  "jiff",
  "lzma-rust2",
  "memchr",

@@ -102,81 +102,48 @@ fn hierholzer_euler_circuit(
     circuit
 }
 
-#[derive(Debug)]
-pub struct TracePen {
-    height: u32,
-    scale: f64,
-    offset: (f64, f64),
-    shear: Option<f64>,
-    path: Vec<CurvePoint>,
+pub trait PointTracer {
+    type Error;
+
+    fn start(&mut self, point: (usize, usize)) -> Result<(), Self::Error>;
+    fn line(&mut self, point: (usize, usize)) -> Result<(), Self::Error>;
+    fn done(&mut self) -> Vec<CurvePoint>;
 }
 
-impl TracePen {
-    fn convert_point(&self, point: (usize, usize)) -> CurvePoint {
-        todo!()
-    }
-
-    fn start(&mut self, point: (usize, usize)) {
-        self.path = vec![self.convert_point(point)];
-    }
-
-    fn line(&mut self, point: (usize, usize)) {
-        let converted = self.convert_point(point);
-        if let Some([p1, p2]) = self.path.last_chunk_mut::<2>()
-            && collinear(p1, p2, &converted)
-        {
-            *p2 = converted;
-        } else {
-            self.path.push(converted);
-        }
-    }
-
-    fn done(&mut self) -> Vec<CurvePoint> {
-        if let Some(point) = self.path.first() {
-            self.path.push(point.clone());
-        }
-        self.path.drain(..).collect()
-    }
-}
-
-fn collinear(p1: &CurvePoint, p2: &CurvePoint, p3: &CurvePoint) -> bool {
-    let (x1, y1) = (p2.x - p1.x, p2.y - p1.y);
-    let (x2, y2) = (p3.x - p1.x, p3.y - p1.y);
-    (x1 * y2) == (x2 * y1)
-}
-
-fn trace_paths(
-    pen: &mut TracePen,
+fn trace_paths<T>(
+    pen: &mut impl PointTracer<Error = T>,
     paths: impl Iterator<Item = impl Iterator<Item = (usize, usize)>>,
-) -> Vec<Contour> {
+) -> Result<(Vec<Contour>, Bbox), T> {
     let mut contours = vec![];
+    let mut bbox = Bbox::default();
     for mut path in paths {
         if let Some(first) = path.next() {
-            pen.start(first);
+            pen.start(first)?;
             for next in path {
-                pen.line(next);
+                pen.line(next)?;
             }
             let contour = pen.done();
+            for point in contour.iter() {
+                bbox.x_min = bbox.x_min.min(point.x);
+                bbox.x_max = bbox.x_max.max(point.x);
+                bbox.y_min = bbox.y_min.min(point.y);
+                bbox.y_max = bbox.y_max.max(point.y);
+            }
             contours.push(Contour::from(contour));
         }
     }
-    contours
+    Ok((contours, bbox))
 }
 
-pub fn full_glyph(
+pub fn full_glyph<T>(
     bitmap: &Bitmap,
-    pen: &mut TracePen,
-) -> Result<SimpleGlyph, std::num::TryFromIntError> {
+    pen: &mut impl PointTracer<Error = T>,
+) -> Result<SimpleGlyph, T> {
     let graph = bitmap_to_graph(bitmap);
     let paths = trace(&graph);
-    let contours = trace_paths(pen, paths.iter().map(|x| x.iter().copied()));
+    let (contours, bbox) = trace_paths(pen, paths.iter().map(|x| x.iter().copied()))?;
     Ok(SimpleGlyph {
-        bbox: Bbox {
-            x_min: 0,
-            y_min: 0,
-            x_max: bitmap.width().try_into()?,
-            y_max: bitmap.height().try_into()?,
-        },
+        bbox,
         contours,
         instructions: vec![],
         overlaps: false,

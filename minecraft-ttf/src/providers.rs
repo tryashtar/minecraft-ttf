@@ -170,8 +170,8 @@ impl Display for Identifier {
 
 #[derive(Debug, Default)]
 pub struct ModifiedTimes {
-    oldest: Option<jiff::Timestamp>,
-    newest: Option<jiff::Timestamp>,
+    pub oldest: Option<jiff::Timestamp>,
+    pub newest: Option<jiff::Timestamp>,
 }
 
 impl ModifiedTimes {
@@ -303,7 +303,7 @@ fn image_portion(
     bitmap.resized(&resize_box)
 }
 
-fn image_to_bitmap(image: image::SubImage<&image::DynamicImage>, threshold: u8) -> Bitmap {
+pub fn image_to_bitmap(image: image::SubImage<&image::DynamicImage>, threshold: u8) -> Bitmap {
     let mut bitmap = Bitmap::new(image.width() as usize, image.height() as usize);
     for (x, y, pixel) in image.pixels() {
         if pixel.0[3] >= threshold {
@@ -311,6 +311,22 @@ fn image_to_bitmap(image: image::SubImage<&image::DynamicImage>, threshold: u8) 
         }
     }
     bitmap
+}
+
+pub fn colors_to_bitmaps(
+    image: image::SubImage<&image::DynamicImage>,
+    threshold: u8,
+) -> indexmap::IndexMap<image::Rgba<u8>, Bitmap> {
+    let mut result = indexmap::IndexMap::new();
+    for (x, y, pixel) in image.pixels() {
+        if pixel.0[3] >= threshold {
+            result
+                .entry(pixel)
+                .or_insert_with(|| Bitmap::new(image.width() as usize, image.height() as usize))
+                .set(x as usize, y as usize, true);
+        }
+    }
+    result
 }
 
 pub trait ProviderOptions {
@@ -700,7 +716,7 @@ fn unihex_bitmap(unihex: &str) -> Result<(char, Bitmap), UnihexError> {
     };
     let code_str = &unihex[..colon_index];
     let art = &unihex[colon_index + 1..];
-    let code = u32::from_str_radix(&code_str, 16)?;
+    let code = u32::from_str_radix(code_str, 16)?;
     let Some(char) = char::from_u32(code) else {
         return Err(UnihexError::InvalidChar);
     };

@@ -6,13 +6,20 @@ use std::{
     str::FromStr,
 };
 
-use bitmap_ttf::font::make_font;
+use bitmap_ttf::{
+    font::{FontPositions, MakeFontError, make_font},
+    write_fonts::tables::glyf::Glyph,
+};
 use clap::Parser;
 use image::GenericImageView;
 use tracing::error;
 use tracing_subscriber::layer::SubscriberExt;
 
-use crate::{cache::AssetStorage, font::Style, versions::VanillaFontId};
+use crate::{
+    cache::AssetStorage,
+    font::{Style, create_font, font_meta},
+    versions::VanillaFontId,
+};
 
 mod cache;
 mod font;
@@ -334,6 +341,8 @@ enum CommandError {
     Providers(#[from] providers::ProvidersError),
     #[error("No version with that name found")]
     UnknownVersion,
+    #[error(transparent)]
+    Font(#[from] MakeFontError),
 }
 
 fn run(command: Command) -> Result<(), CommandError> {
@@ -420,6 +429,7 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     println!("Font support level {}", info.version.name);
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
+    let positions = positions();
     for identifier in &args.identifiers {
         let providers = versions::get_providers(
             &info.version,
@@ -431,10 +441,44 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
             None => {
                 println!("No providers found for {}", identifier);
             }
-            Some(providers) => {}
+            Some(providers) => {
+                for style in &args.generate_args.styles {
+                    let style_info = style.info();
+                    let info = create_font(
+                        providers.providers.iter(),
+                        None,
+                        style_info.bold,
+                        style_info.italic,
+                    )
+                    .unwrap();
+                    let meta = font_meta(
+                        String::from("test"),
+                        style_info,
+                        info.font_em,
+                        jiff::Timestamp::constant(0, 0),
+                        providers.times.newest.unwrap(),
+                    );
+                    let data = make_font(meta, &positions, &info.chars, &Glyph::Empty).unwrap();
+                    std::fs::write("test.ttf", &data).unwrap();
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn positions() -> FontPositions {
+    FontPositions {
+        ascent: 9.0 / 12.0,
+        descent: 2.0 / 12.0,
+        s_cap_height: 7.0 / 12.0,
+        sx_height: 5.0 / 12.0,
+        y_strikeout_position: 4.0 / 12.0,
+        y_strikeout_size: 1.0 / 12.0,
+        underline_position: -1.0 / 12.0,
+        underline_thickness: 1.0 / 12.0,
+        italic_angle: 4.0f64.atan2(1.0).to_degrees() - 90.0,
+    }
 }
 
 fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
