@@ -117,10 +117,10 @@ impl Bitmap {
     }
 
     pub fn draw(&mut self, other: &Bitmap, left: usize, top: usize) {
-        for y in top..min(top + other.height(), self.height) {
-            for x in left..min(left + other.width(), self.width) {
+        for y in 0..min(other.height(), self.height - top) {
+            for x in 0..min(other.width(), self.width - left) {
                 if other.get(x, y) {
-                    self.set(x, y, true);
+                    self.set(x + left, y + top, true);
                 }
             }
         }

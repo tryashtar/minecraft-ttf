@@ -249,14 +249,15 @@ fn bitmap_glyph(
     let mut pen = TracePen::new(
         mask_height,
         scale,
-        (offset_x, offset_y),
+        (offset_x, -offset_y),
         italic.map(|x| x.1),
     );
     let char_width = advance * pixel_scale;
     let char_height = height_f * pixel_scale;
-    let (base_glyph, offsets, color_offsets) = match bold_offset {
+    let (base_glyph, advance, offsets, color_offsets) = match bold_offset {
         None => (
             full_glyph(base_layer, &mut pen)?,
+            char_width,
             vec![(0, 0)],
             vec![(0, 0)],
         ),
@@ -280,19 +281,20 @@ fn bitmap_glyph(
                 bold_bitmap.draw(base_layer, int_offset, 0);
                 (
                     full_glyph(&bold_bitmap, &mut pen)?,
+                    char_width + (val * pixel_scale),
                     vec![(0, 0)],
                     color_offsets,
                 )
             } else {
                 (
                     full_glyph(base_layer, &mut pen)?,
+                    char_width,
                     color_offsets.clone(),
                     color_offsets,
                 )
             }
         }
     };
-    let char_advance = char_width + bold_offset.unwrap_or(0.0);
     let mut colored_paths = vec![];
     for (bitmap, color) in colored_layers {
         let path = full_glyph(bitmap, &mut pen)?;
@@ -302,7 +304,7 @@ fn bitmap_glyph(
         });
     }
     Ok(GlyphInfo {
-        width: char_advance.to_u16().ok_or(CoordsError::FloatCast)?,
+        width: advance.to_u16().ok_or(CoordsError::FloatCast)?,
         height: char_height.to_u16().ok_or(CoordsError::FloatCast)?,
         base_layer: Some(base_glyph),
         base_offsets: offsets,
@@ -332,8 +334,8 @@ impl TracePen {
     }
 
     fn convert_point(&self, point: (usize, usize)) -> Result<CurvePoint, CoordsError> {
-        let (x, mut y) = point;
-        y = self.height - y;
+        let (x, y) = point;
+        let y = self.height - y;
         let mut xf = x.to_f32().ok_or(CoordsError::SizeCast)?;
         let mut yf = y.to_f32().ok_or(CoordsError::SizeCast)?;
         if let Some(shear) = self.shear {
