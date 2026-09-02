@@ -10,6 +10,7 @@ use std::{
 
 use bitmap_ttf::bitmap::{Bitmap, Rectangle};
 use image::GenericImageView;
+use tracing::{Level, debug, span};
 
 use crate::{cache, storage};
 
@@ -27,6 +28,7 @@ pub struct BitmapProvider {
     pub chars: indexmap::IndexMap<char, CharBitmap>,
 }
 
+#[derive(Debug)]
 pub struct CharImage {
     pub content_box: Rectangle,
     pub bitmap: Bitmap,
@@ -34,6 +36,7 @@ pub struct CharImage {
     pub bold_offset: f32,
 }
 
+#[derive(Debug)]
 pub struct ImageProvider {
     pub image: image::DynamicImage,
     pub has_color: bool,
@@ -47,6 +50,7 @@ pub struct SpaceProvider {
     pub chars: BTreeMap<char, f32>,
 }
 
+#[derive(Debug)]
 pub enum Provider {
     Bitmap(BitmapProvider),
     Image(ImageProvider),
@@ -571,6 +575,12 @@ fn convert_bitmap_provider(
     options: &impl ProviderOptions,
     bitmap: &JsonBitmapProvider,
 ) -> Result<(ImageProvider, ModifiedTimes), ProvidersError> {
+    let span = span!(
+        Level::DEBUG,
+        "converting bitmap provider",
+        img = %bitmap.file
+    );
+    let _guard = span.enter();
     let mut times = ModifiedTimes::default();
     let img_entry = bitmap.file.to_entry(Some("textures"), None);
     let img_data = storage::read_image(store, &img_entry)?;
@@ -582,16 +592,15 @@ fn convert_bitmap_provider(
     let chars = char_images
         .into_iter()
         .map(|(char, (content_box, bitmap))| {
+            debug!("{} ({:04X}):\n{}", char, char as u32, bitmap);
             let advance = normal_advance(&bitmap, height);
-            (
-                char,
-                CharImage {
-                    content_box,
-                    bitmap,
-                    advance,
-                    bold_offset: 1.0,
-                },
-            )
+            let img = CharImage {
+                content_box,
+                bitmap,
+                advance,
+                bold_offset: 1.0,
+            };
+            (char, img)
         })
         .collect();
     let full = ImageProvider {
@@ -610,6 +619,12 @@ fn convert_unihex_provider(
     uneven: bool,
     unihex: &JsonUnihexProvider,
 ) -> Result<(BitmapProvider, ModifiedTimes), ProvidersError> {
+    let span = span!(
+        Level::DEBUG,
+        "converting unihex provider",
+        hex = %unihex.hex_file
+    );
+    let _guard = span.enter();
     let mut times = ModifiedTimes::default();
     let zip_entry = unihex.hex_file.to_entry(None, None);
     let zip_time = store.modified_time(&zip_entry)?;
@@ -621,10 +636,16 @@ fn convert_unihex_provider(
     times.update(lines.modified_time);
     let mut chars = indexmap::IndexMap::new();
     for line in &lines.data {
-        let (char, bitmap) = unihex_bitmap(line)?;
+        let colon_index = line.find(':').ok_or(UnihexError::MissingColon)?;
+        let code_str = &line[..colon_index];
+        let art = &line[colon_index + 1..];
+        let code = u32::from_str_radix(code_str, 16).map_err(UnihexError::Parse)?;
+        let char = char::from_u32(code).ok_or(UnihexError::InvalidChar)?;
         if !options.include_char(char) || !options.include_unifont_char(char) {
             continue;
         }
+        let bitmap = unihex_bitmap(art)?;
+        debug!("{} ({:04X}):\n{}", char, char as u32, bitmap);
         let (left, right) = unifont_char_size(
             char,
             &bitmap,
@@ -710,16 +731,7 @@ pub enum UnihexError {
     InvalidDimensions(usize),
 }
 
-fn unihex_bitmap(unihex: &str) -> Result<(char, Bitmap), UnihexError> {
-    let Some(colon_index) = unihex.find(':') else {
-        return Err(UnihexError::MissingColon);
-    };
-    let code_str = &unihex[..colon_index];
-    let art = &unihex[colon_index + 1..];
-    let code = u32::from_str_radix(code_str, 16)?;
-    let Some(char) = char::from_u32(code) else {
-        return Err(UnihexError::InvalidChar);
-    };
+fn unihex_bitmap(art: &str) -> Result<Bitmap, UnihexError> {
     let bytes = hex::decode(art)?;
     let bits = bitmap_ttf::bitvec::vec::BitVec::from_vec(bytes);
     let bitmap = match bits.len() {
@@ -729,7 +741,7 @@ fn unihex_bitmap(unihex: &str) -> Result<(char, Bitmap), UnihexError> {
             return Err(UnihexError::InvalidDimensions(other));
         }
     };
-    Ok((char, bitmap))
+    Ok(bitmap)
 }
 
 pub fn unicode_sheets(

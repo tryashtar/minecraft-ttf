@@ -1,5 +1,7 @@
 pub mod bitmap;
 pub mod font;
+#[cfg(test)]
+mod tests;
 pub mod vectorize;
 
 pub use bitvec;

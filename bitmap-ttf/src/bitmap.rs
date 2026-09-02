@@ -1,10 +1,29 @@
-use std::cmp::{max, min};
+use std::{
+    cmp::{max, min},
+    fmt::Display,
+};
 
 #[derive(Debug, Hash)]
 pub struct Bitmap {
     bits: bitvec::vec::BitVec<u8>,
     width: usize,
     height: usize,
+}
+
+impl Display for Bitmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if self.get(x, y) {
+                    write!(f, "█")?;
+                } else {
+                    write!(f, " ")?;
+                }
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

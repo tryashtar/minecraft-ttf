@@ -8,7 +8,7 @@ use crate::bitmap::Bitmap;
 
 pub type BitmapGraph = Graph<(usize, usize), (), Directed>;
 
-fn bitmap_to_graph(bitmap: &Bitmap) -> BitmapGraph {
+pub fn bitmap_to_graph(bitmap: &Bitmap) -> BitmapGraph {
     let mut graph = Graph::new();
     let mut nodes: HashMap<(usize, usize), NodeIndex> = HashMap::new();
     let mut get_node = |graph: &mut Graph<_, _, _>, x: usize, y: usize| -> NodeIndex {
@@ -19,20 +19,24 @@ fn bitmap_to_graph(bitmap: &Bitmap) -> BitmapGraph {
     for y in 0..bitmap.height() {
         for x in 0..bitmap.width() {
             if bitmap.get(x, y) {
-                let top_left = get_node(&mut graph, x, y);
-                let top_right = get_node(&mut graph, x + 1, y);
-                let bottom_left = get_node(&mut graph, x, y + 1);
-                let bottom_right = get_node(&mut graph, x + 1, y + 1);
                 if y == 0 || !bitmap.try_get(x, y - 1).unwrap_or(false) {
+                    let top_left = get_node(&mut graph, x, y);
+                    let top_right = get_node(&mut graph, x + 1, y);
                     graph.add_edge(top_left, top_right, ());
                 }
                 if !bitmap.try_get(x + 1, y).unwrap_or(false) {
+                    let top_right = get_node(&mut graph, x + 1, y);
+                    let bottom_right = get_node(&mut graph, x + 1, y + 1);
                     graph.add_edge(top_right, bottom_right, ());
                 }
                 if !bitmap.try_get(x, y + 1).unwrap_or(false) {
+                    let bottom_left = get_node(&mut graph, x, y + 1);
+                    let bottom_right = get_node(&mut graph, x + 1, y + 1);
                     graph.add_edge(bottom_right, bottom_left, ());
                 }
                 if x == 0 || !bitmap.try_get(x - 1, y).unwrap_or(false) {
+                    let top_left = get_node(&mut graph, x, y);
+                    let bottom_left = get_node(&mut graph, x, y + 1);
                     graph.add_edge(bottom_left, top_left, ());
                 }
             }
@@ -46,7 +50,7 @@ fn swap_pair<A, B>(tuple: (A, B)) -> (B, A) {
     (b, a)
 }
 
-fn trace(graph: &BitmapGraph) -> Vec<Vec<(usize, usize)>> {
+pub fn trace(graph: &BitmapGraph) -> Vec<Vec<(usize, usize)>> {
     let components = tarjan_scc(graph);
     let mut result = vec![];
     for component in components {

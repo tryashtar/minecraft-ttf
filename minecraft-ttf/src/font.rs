@@ -108,11 +108,13 @@ pub fn create_font<'a>(
                     if chars.contains_key(char) {
                         continue;
                     }
-                    let mut advance = width.to_u16().ok_or(CoordsError::FloatCast)?;
+                    let mut advance = *width;
                     if bold {
-                        advance += 1;
+                        advance += 1.0;
                     }
-                    let glyph = space_glyph(advance);
+                    advance *= pixel_scale;
+                    let int_advance = advance.to_u16().ok_or(CoordsError::FloatCast)?;
+                    let glyph = space_glyph(int_advance);
                     chars.insert(*char, glyph);
                 }
             }
@@ -160,15 +162,13 @@ pub fn create_font<'a>(
                         planes
                             .into_iter()
                             .map(|(color, bitmap)| {
-                                (
-                                    bitmap,
-                                    ColorRecord {
-                                        blue: color.0[2],
-                                        green: color.0[1],
-                                        red: color.0[0],
-                                        alpha: color.0[3],
-                                    },
-                                )
+                                let record = ColorRecord {
+                                    blue: color.0[2],
+                                    green: color.0[1],
+                                    red: color.0[0],
+                                    alpha: color.0[3],
+                                };
+                                (bitmap, record)
                             })
                             .collect()
                     } else {

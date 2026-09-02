@@ -6,7 +6,7 @@ use read_fonts::tables::{
     glyf::{Anchor, CurvePoint, Transform},
     head::Flags,
 };
-use tracing::debug;
+use tracing::{Level, debug, span};
 use write_fonts::{
     FontBuilder, OffsetMarker,
     tables::{
@@ -355,6 +355,8 @@ impl Cmap4RangeBuilder {
 }
 
 fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
+    let span = span!(Level::DEBUG, "building cmap4");
+    let _guard = span.enter();
     let mut builder = Cmap4RangeBuilder::default();
     for (char, glyph) in pairs {
         builder.consume(char, glyph);
@@ -415,6 +417,8 @@ impl Cmap12RangeBuilder {
 }
 
 fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
+    let span = span!(Level::DEBUG, "building cmap12");
+    let _guard = span.enter();
     let mut builder = Cmap12RangeBuilder::default();
     for (char, glyph) in pairs {
         builder.consume(char, glyph);
@@ -428,13 +432,13 @@ fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
 
 #[derive(Debug, Default)]
 struct GlyphSize {
-    start: (i16, i16),
-    largest: (i16, i16),
+    start: (i16, i16, i16),
+    largest: (i16, i16, i16),
 }
 
 impl GlyphSize {
-    fn new(size: Bbox) -> Self {
-        let size = (size.x_max, size.y_max);
+    fn new(size: Bbox, advance: u16) -> Self {
+        let size = (size.x_max, size.y_max, advance as i16);
         Self {
             start: size,
             largest: size,
@@ -442,12 +446,13 @@ impl GlyphSize {
     }
 
     fn update(&mut self, offset: (i16, i16)) -> Result<(), CoordsError> {
-        let (x, y) = self.start;
+        let (x, y, a) = self.start;
         let (ox, oy) = offset;
         let width = x.checked_add(ox).ok_or(CoordsError::IntAdd)?;
         let height = y.checked_add(oy).ok_or(CoordsError::IntAdd)?;
-        let (px, py) = self.largest;
-        self.largest = (px.max(width), py.max(height));
+        let advance = a.checked_add(ox).ok_or(CoordsError::IntAdd)?;
+        let (px, py, pa) = self.largest;
+        self.largest = (px.max(width), py.max(height), pa.max(advance));
         Ok(())
     }
 }
@@ -466,18 +471,18 @@ fn add_glyphs(
     let mut widest = 0i16;
     let mut tallest = 0i16;
     glyph_builder.add_simple_glyph(notdef)?;
+    hmtx.h_metrics.push(LongMetric {
+        advance: 0,
+        side_bearing: 0,
+    });
     let mut component_pieces = vec![];
     let mut color_pieces = vec![];
     for (char, info) in chars.iter() {
-        let mut size = info
-            .base_layer
-            .as_ref()
-            .map(|x| GlyphSize::new(x.bbox))
-            .unwrap_or_default();
+        let bbox = info.base_layer.as_ref().map(|x| x.bbox).unwrap_or_default();
+        let mut size = GlyphSize::new(bbox, info.width);
         let glyph_index = match (&info.base_layer, info.base_offsets.as_slice()) {
             (None, _) | (_, []) => glyph_builder.add_empty_glyph()?,
             (Some(layer), [(0, 0)]) => glyph_builder.add_simple_glyph(layer)?,
-
             (Some(layer), [(x, y)]) => {
                 size.update((*x, *y))?;
                 let mut cloned = layer.clone();
@@ -504,11 +509,11 @@ fn add_glyphs(
             color_pieces.push((glyph_index, &info.colored_layers, &info.colored_offsets));
         }
         cmap_builder.add(*char, glyph_index);
-        let (width, height) = size.largest;
+        let (width, height, advance) = size.largest;
         widest = widest.max(width);
         tallest = tallest.max(height);
         hmtx.h_metrics.push(LongMetric {
-            advance: width.try_into().map_err(CoordsError::IntCast)?,
+            advance: advance.try_into().map_err(CoordsError::IntCast)?,
             side_bearing: 0,
         });
     }
