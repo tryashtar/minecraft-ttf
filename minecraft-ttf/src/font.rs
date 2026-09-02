@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+};
 
 use bitmap_ttf::{
     bitmap::Bitmap,
@@ -66,7 +69,7 @@ impl Display for Style {
 
 #[derive(Debug)]
 pub struct FontInfo {
-    pub chars: indexmap::IndexMap<char, GlyphInfo>,
+    pub chars: BTreeMap<char, GlyphInfo>,
     pub missing_glyph: GlyphInfo,
     pub scales: HashMap<(u32, u32), Vec<char>>,
     pub colored: Vec<char>,
@@ -80,7 +83,7 @@ pub fn create_font<'a>(
     italic: bool,
 ) -> Result<FontInfo, CoordsError> {
     let mut scales = HashMap::new();
-    let mut chars = indexmap::IndexMap::new();
+    let mut chars = BTreeMap::new();
     let mut colored = vec![];
     let font_em = 1200;
     let pixel_scale = 100.0;
@@ -383,8 +386,8 @@ impl PointTracer for TracePen {
 }
 
 fn collinear(p1: &CurvePoint, p2: &CurvePoint, p3: &CurvePoint) -> bool {
-    let (x1, y1) = (p2.x - p1.x, p2.y - p1.y);
-    let (x2, y2) = (p3.x - p1.x, p3.y - p1.y);
+    let (x1, y1): (i32, i32) = ((p2.x - p1.x).into(), (p2.y - p1.y).into());
+    let (x2, y2): (i32, i32) = ((p3.x - p1.x).into(), (p3.y - p1.y).into());
     (x1 * y2) == (x2 * y1)
 }
 

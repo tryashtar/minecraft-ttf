@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
+
 use num_traits::ToPrimitive;
 use read_fonts::tables::{
     cmap::PlatformId,
     glyf::{Anchor, CurvePoint, Transform},
+    head::Flags,
 };
+use tracing::debug;
 use write_fonts::{
     FontBuilder, OffsetMarker,
     tables::{
@@ -11,12 +15,12 @@ use write_fonts::{
         cpal::{ColorRecord, Cpal},
         glyf::{
             Bbox, Component, ComponentFlags, CompositeGlyph, GlyfLocaBuilder, Glyph, SimpleGlyph,
-            SomeGlyph,
         },
         head::{Head, MacStyle},
         hhea::Hhea,
         hmtx::Hmtx,
         loca::LocaFormat,
+        maxp::Maxp,
         name::{Name, NameRecord},
         os2::{Os2, SelectionFlags},
         post::Post,
@@ -102,12 +106,22 @@ pub enum CoordsError {
 pub fn make_font(
     meta: FontMeta,
     positions: &FontPositions,
-    chars: &indexmap::IndexMap<char, GlyphInfo>,
-    notdef: &Glyph,
+    smallest_legible: u16,
+    chars: &BTreeMap<char, GlyphInfo>,
+    notdef: &SimpleGlyph,
 ) -> Result<Vec<u8>, MakeFontError> {
     let mut builder = FontBuilder::new();
-    let (loca_format, widest, tallest) = add_glyphs(&mut builder, chars, notdef)?;
-    add_metrics(&mut builder, meta, positions, widest, tallest, loca_format)?;
+    let (loca_format, glyph_count, widest, tallest) = add_glyphs(&mut builder, chars, notdef)?;
+    add_metrics(
+        &mut builder,
+        meta,
+        positions,
+        glyph_count,
+        widest,
+        tallest,
+        smallest_legible,
+        loca_format,
+    )?;
     Ok(builder.build())
 }
 
@@ -167,14 +181,56 @@ fn make_offset_component(
 struct GlyphBuilder {
     builder: GlyfLocaBuilder,
     next_index: u16,
+    max_points: u16,
+    max_contours: u16,
 }
 
 impl GlyphBuilder {
-    fn add_glyph(&mut self, glyph: &impl SomeGlyph) -> Result<u16, write_fonts::error::Error> {
-        self.builder.add_glyph(glyph)?;
+    fn next(&mut self) -> u16 {
         let index = self.next_index;
         self.next_index += 1;
-        Ok(index)
+        index
+    }
+
+    fn add_empty_glyph(&mut self) -> Result<u16, write_fonts::error::Error> {
+        self.builder.add_glyph(&Glyph::Empty)?;
+        Ok(self.next())
+    }
+
+    fn add_simple_glyph(&mut self, glyph: &SimpleGlyph) -> Result<u16, write_fonts::error::Error> {
+        self.builder.add_glyph(glyph)?;
+        self.max_contours = self.max_contours.max(glyph.contours.len() as u16);
+        for contour in glyph.contours.iter() {
+            self.max_points = self.max_points.max(contour.len() as u16);
+        }
+        Ok(self.next())
+    }
+
+    fn add_composite_glyph(
+        &mut self,
+        glyph: &CompositeGlyph,
+    ) -> Result<u16, write_fonts::error::Error> {
+        self.builder.add_glyph(glyph)?;
+        Ok(self.next())
+    }
+
+    fn build_maxp(&self) -> Maxp {
+        Maxp {
+            num_glyphs: self.next_index,
+            max_points: Some(self.max_points),
+            max_contours: Some(self.max_contours),
+            max_composite_points: Some(self.max_points * 2),
+            max_composite_contours: Some(self.max_contours * 2),
+            max_zones: Some(2),
+            max_twilight_points: Some(0),
+            max_storage: Some(0),
+            max_function_defs: Some(0),
+            max_instruction_defs: Some(0),
+            max_stack_elements: Some(0),
+            max_size_of_instructions: Some(0),
+            max_component_elements: Some(2),
+            max_component_depth: Some(1),
+        }
     }
 }
 
@@ -224,105 +280,165 @@ impl CmapBuilder {
     }
 }
 
-fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
-    let mut start_code = vec![];
-    let mut end_code = vec![];
-    let mut id_delta = vec![];
-    let mut id_range_offsets = vec![];
-    let mut current_range = None;
-    for (char, glyph) in pairs {
-        current_range = match current_range {
-            None => Some((char, char, glyph)),
-            Some((start, last, start_glyph)) => {
-                if last + 1 == char {
-                    Some((start, char, start_glyph))
-                } else {
-                    start_code.push(start);
-                    end_code.push(last);
-                    id_delta.push(
-                        // "as" is guaranteed to wrap here
-                        // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.numeric.int-same-size
-                        start_glyph.wrapping_sub(start) as i16,
-                    );
-                    id_range_offsets.push(0);
-                    None
-                }
+#[derive(Debug, Copy, Clone)]
+struct Cmap4Range {
+    start: u16,
+    end: u16,
+    start_glyph: u16,
+}
+
+#[derive(Debug, Default)]
+struct Cmap4RangeBuilder {
+    start_code: Vec<u16>,
+    end_code: Vec<u16>,
+    id_delta: Vec<i16>,
+    id_range_offsets: Vec<u16>,
+    current_range: Option<Cmap4Range>,
+}
+
+impl Cmap4RangeBuilder {
+    fn consume(&mut self, char: u16, glyph: u16) {
+        if let Some(current) = self.current_range.as_mut()
+            && current.end + 1 == char
+        {
+            current.end = char;
+        } else {
+            let new_row = Cmap4Range {
+                start: char,
+                end: char,
+                start_glyph: glyph,
+            };
+            if let Some(old) = self.current_range.replace(new_row) {
+                self.push(old);
             }
-        };
+        }
     }
-    if let Some((start, last, start_glyph)) = current_range {
-        start_code.push(start);
-        end_code.push(last);
-        id_delta.push(
+
+    fn push(
+        &mut self,
+        Cmap4Range {
+            start,
+            end,
+            start_glyph,
+        }: Cmap4Range,
+    ) {
+        debug!(
+            "range from {} ({:04X}) to {} ({:04X}) ({} chars)",
+            char::from_u32(start.into()).unwrap_or('\0'),
+            start,
+            char::from_u32(end.into()).unwrap_or('\0'),
+            end,
+            end - start + 1
+        );
+        self.start_code.push(start);
+        self.end_code.push(end);
+        self.id_delta.push(
             // "as" is guaranteed to wrap here
             // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.numeric.int-same-size
             start_glyph.wrapping_sub(start) as i16,
         );
-        id_range_offsets.push(0);
-        if last < 0xffff {
-            start_code.push(0xffff);
-            end_code.push(0xffff);
-            id_delta.push(1);
-            id_range_offsets.push(0);
+        self.id_range_offsets.push(0);
+    }
+
+    fn done(&mut self) {
+        if let Some(last) = self.current_range.take() {
+            let sentinel = last.end < 0xffff;
+            self.push(last);
+            if sentinel {
+                self.start_code.push(0xffff);
+                self.end_code.push(0xffff);
+                self.id_delta.push(1);
+                self.id_range_offsets.push(0);
+            }
         }
     }
+}
+
+fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
+    let mut builder = Cmap4RangeBuilder::default();
+    for (char, glyph) in pairs {
+        builder.consume(char, glyph);
+    }
+    builder.done();
     Cmap4 {
         language: 0,
-        end_code,
-        start_code,
-        id_delta,
-        id_range_offsets,
+        end_code: builder.end_code,
+        start_code: builder.start_code,
+        id_delta: builder.id_delta,
+        id_range_offsets: builder.id_range_offsets,
         glyph_id_array: vec![],
     }
 }
 
-fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
-    let mut groups = vec![];
-    let mut current_group = None;
-    for (char, glyph) in pairs {
-        current_group = match current_group {
-            None => Some(SequentialMapGroup {
-                start_char_code: char.into(),
-                end_char_code: char.into(),
+#[derive(Debug, Default)]
+struct Cmap12RangeBuilder {
+    ranges: Vec<SequentialMapGroup>,
+    current_range: Option<SequentialMapGroup>,
+}
+
+impl Cmap12RangeBuilder {
+    fn consume(&mut self, char: char, glyph: u16) {
+        let char_u32 = char.into();
+        if let Some(current) = self.current_range.as_mut()
+            && current.end_char_code + 1 == char_u32
+        {
+            current.end_char_code = char_u32;
+        } else {
+            let new_row = SequentialMapGroup {
+                start_char_code: char_u32,
+                end_char_code: char_u32,
                 start_glyph_id: glyph.into(),
-            }),
-            Some(group) => {
-                if group.end_char_code + 1 == char.into() {
-                    Some(SequentialMapGroup {
-                        start_char_code: group.start_char_code,
-                        end_char_code: char.into(),
-                        start_glyph_id: group.start_glyph_id,
-                    })
-                } else {
-                    groups.push(group);
-                    None
-                }
+            };
+            if let Some(old) = self.current_range.replace(new_row) {
+                self.push(old);
             }
-        };
+        }
     }
-    if let Some(group) = current_group {
-        groups.push(group);
+
+    fn push(&mut self, range: SequentialMapGroup) {
+        debug!(
+            "range from {} ({:04X}) to {} ({:04X}) ({} chars)",
+            char::from_u32(range.start_char_code).unwrap_or('\0'),
+            range.start_char_code,
+            char::from_u32(range.end_char_code).unwrap_or('\0'),
+            range.end_char_code,
+            range.end_char_code - range.start_char_code + 1
+        );
+        self.ranges.push(range);
     }
-    Cmap12 {
-        language: 0,
-        groups,
+
+    fn done(&mut self) {
+        if let Some(last) = self.current_range.take() {
+            self.push(last);
+        }
     }
 }
 
-#[derive(Debug)]
+fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
+    let mut builder = Cmap12RangeBuilder::default();
+    for (char, glyph) in pairs {
+        builder.consume(char, glyph);
+    }
+    builder.done();
+    Cmap12 {
+        language: 0,
+        groups: builder.ranges,
+    }
+}
+
+#[derive(Debug, Default)]
 struct GlyphSize {
     start: (i16, i16),
     largest: (i16, i16),
 }
 
 impl GlyphSize {
-    fn new(size: (u16, u16)) -> Result<Self, CoordsError> {
-        let (x, y) = size;
-        let size = (x.try_into()?, y.try_into()?);
-        Ok(Self {
+    fn new(size: Bbox) -> Self {
+        let size = (size.x_max, size.y_max);
+        Self {
             start: size,
             largest: size,
-        })
+        }
     }
 
     fn update(&mut self, offset: (i16, i16)) -> Result<(), CoordsError> {
@@ -338,9 +454,9 @@ impl GlyphSize {
 
 fn add_glyphs(
     builder: &mut FontBuilder,
-    chars: &indexmap::IndexMap<char, GlyphInfo>,
-    notdef: &Glyph,
-) -> Result<(LocaFormat, i16, i16), MakeFontError> {
+    chars: &BTreeMap<char, GlyphInfo>,
+    notdef: &SimpleGlyph,
+) -> Result<(LocaFormat, u16, i16, i16), MakeFontError> {
     let mut glyph_builder = GlyphBuilder::default();
     let mut cmap_builder = CmapBuilder::default();
     let mut hmtx = Hmtx::default();
@@ -349,19 +465,24 @@ fn add_glyphs(
     let mut color_layer_records = vec![];
     let mut widest = 0i16;
     let mut tallest = 0i16;
-    glyph_builder.add_glyph(notdef)?;
+    glyph_builder.add_simple_glyph(notdef)?;
     let mut component_pieces = vec![];
     let mut color_pieces = vec![];
     for (char, info) in chars.iter() {
-        let mut size = GlyphSize::new((info.width, info.height))?;
+        let mut size = info
+            .base_layer
+            .as_ref()
+            .map(|x| GlyphSize::new(x.bbox))
+            .unwrap_or_default();
         let glyph_index = match (&info.base_layer, info.base_offsets.as_slice()) {
-            (None, _) | (_, []) => glyph_builder.add_glyph(&Glyph::Empty)?,
-            (Some(layer), [(0, 0)]) => glyph_builder.add_glyph(layer)?,
+            (None, _) | (_, []) => glyph_builder.add_empty_glyph()?,
+            (Some(layer), [(0, 0)]) => glyph_builder.add_simple_glyph(layer)?,
+
             (Some(layer), [(x, y)]) => {
                 size.update((*x, *y))?;
                 let mut cloned = layer.clone();
                 translate_glyph(&mut cloned, *x, *y);
-                glyph_builder.add_glyph(&cloned)?
+                glyph_builder.add_simple_glyph(&cloned)?
             }
             (Some(layer), [(x, y), rest @ ..]) => {
                 size.update((*x, *y))?;
@@ -376,7 +497,7 @@ fn add_glyphs(
                     composite.add_component(component, bbox);
                 }
                 component_pieces.push(layer);
-                glyph_builder.add_glyph(&Glyph::Composite(composite))?
+                glyph_builder.add_composite_glyph(&composite)?
             }
         };
         if !info.colored_layers.is_empty() {
@@ -385,14 +506,14 @@ fn add_glyphs(
         cmap_builder.add(*char, glyph_index);
         let (width, height) = size.largest;
         widest = widest.max(width);
-        tallest = widest.max(height);
+        tallest = tallest.max(height);
         hmtx.h_metrics.push(LongMetric {
             advance: width.try_into().map_err(CoordsError::IntCast)?,
             side_bearing: 0,
         });
     }
     for glyph in component_pieces {
-        glyph_builder.add_glyph(glyph)?;
+        glyph_builder.add_simple_glyph(glyph)?;
     }
     let mut next_color_index = 0u16;
     for (main_index, layers, offsets) in color_pieces {
@@ -420,7 +541,7 @@ fn add_glyphs(
             for (x, y) in offsets.iter() {
                 let mut cloned = layer.glyph.clone();
                 translate_glyph(&mut cloned, *x, *y);
-                let glyph_index = glyph_builder.add_glyph(&cloned)?;
+                let glyph_index = glyph_builder.add_simple_glyph(&cloned)?;
                 color_layer_records.push(Layer {
                     glyph_id: GlyphId16::new(glyph_index),
                     palette_index,
@@ -428,12 +549,14 @@ fn add_glyphs(
             }
         }
     }
+    let maxp = glyph_builder.build_maxp();
     let (glyf, loca, loca_format) = glyph_builder.builder.build();
     let cmap = cmap_builder.build();
     builder
         .add_table(&glyf)?
         .add_table(&loca)?
         .add_table(&hmtx)?
+        .add_table(&maxp)?
         .add_table(&cmap)?;
     if !palettes.is_empty() {
         let cpal = Cpal::new(
@@ -458,15 +581,17 @@ fn add_glyphs(
         );
         builder.add_table(&cpal)?.add_table(&colr)?;
     }
-    Ok((loca_format, widest, tallest))
+    Ok((loca_format, maxp.num_glyphs, widest, tallest))
 }
 
 fn add_metrics(
     builder: &mut FontBuilder,
     meta: FontMeta,
     positions: &FontPositions,
+    glyph_count: u16,
     widest: i16,
     tallest: i16,
+    smallest_legible: u16,
     loca_format: LocaFormat,
 ) -> Result<(), MakeFontError> {
     let names = meta.names.into_table();
@@ -484,6 +609,7 @@ fn add_metrics(
     let hhea = Hhea {
         ascender: FWord::new(signed_ascent),
         descender: FWord::new(-signed_descent),
+        number_of_h_metrics: glyph_count,
         ..Default::default()
     };
     let (fs_selection, mac_style) = match (meta.bold, meta.italic) {
@@ -527,6 +653,11 @@ fn add_metrics(
         s_typo_line_gap: 0,
         fs_selection,
         us_weight_class: weight,
+        ul_code_page_range_1: Some(0),
+        ul_code_page_range_2: Some(0),
+        us_default_char: Some(0),
+        us_break_char: Some(0),
+        us_max_context: Some(0),
         ..Default::default()
     };
     let post = Post {
@@ -562,6 +693,8 @@ fn add_metrics(
         // enum cast
         // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.enum.discriminant
         index_to_loc_format: loca_format as i16,
+        flags: Flags::BASELINE_AT_Y_0 | Flags::LSB_AT_X_0,
+        lowest_rec_ppem: smallest_legible,
         ..Default::default()
     };
     builder

@@ -706,8 +706,8 @@ pub enum UnihexError {
     InvalidChar,
     #[error(transparent)]
     Hex(#[from] hex::FromHexError),
-    #[error("Invalid dimensions")]
-    InvalidDimensions,
+    #[error("Invalid dimensions for unihex entry: {0}")]
+    InvalidDimensions(usize),
 }
 
 fn unihex_bitmap(unihex: &str) -> Result<(char, Bitmap), UnihexError> {
@@ -722,12 +722,12 @@ fn unihex_bitmap(unihex: &str) -> Result<(char, Bitmap), UnihexError> {
     };
     let bytes = hex::decode(art)?;
     let bits = bitmap_ttf::bitvec::vec::BitVec::from_vec(bytes);
-    let Some(bitmap) = (match bits.len() {
-        256 => Bitmap::from_array(8, 16, bits),
-        512 => Bitmap::from_array(16, 16, bits),
-        _ => None,
-    }) else {
-        return Err(UnihexError::InvalidDimensions);
+    let bitmap = match bits.len() {
+        128 => Bitmap::from_array(8, 16, bits).unwrap(),
+        256 => Bitmap::from_array(16, 16, bits).unwrap(),
+        other => {
+            return Err(UnihexError::InvalidDimensions(other));
+        }
     };
     Ok((char, bitmap))
 }

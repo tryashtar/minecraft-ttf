@@ -1,14 +1,16 @@
 use std::{
+    collections::BTreeMap,
     fmt::{Display, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     range::RangeInclusive,
     str::FromStr,
+    u16,
 };
 
 use bitmap_ttf::{
     font::{FontPositions, MakeFontError, make_font},
-    write_fonts::tables::glyf::Glyph,
+    write_fonts::tables::glyf::{Glyph, SimpleGlyph},
 };
 use clap::Parser;
 use image::GenericImageView;
@@ -17,7 +19,7 @@ use tracing_subscriber::layer::SubscriberExt;
 
 use crate::{
     cache::AssetStorage,
-    font::{Style, create_font, font_meta},
+    font::{FontInfo, Style, create_font, font_meta},
     versions::VanillaFontId,
 };
 
@@ -451,6 +453,7 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
                         style_info.italic,
                     )
                     .unwrap();
+                    let smallest_legible = print_info(&info);
                     let meta = font_meta(
                         String::from("test"),
                         style_info,
@@ -458,13 +461,49 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
                         jiff::Timestamp::constant(0, 0),
                         providers.times.newest.unwrap(),
                     );
-                    let data = make_font(meta, &positions, &info.chars, &Glyph::Empty).unwrap();
+                    let data = make_font(
+                        meta,
+                        &positions,
+                        smallest_legible as u16,
+                        &info.chars,
+                        &SimpleGlyph::default(),
+                    )
+                    .unwrap();
                     std::fs::write("test.ttf", &data).unwrap();
                 }
             }
         }
     }
     Ok(())
+}
+
+fn print_info(info: &FontInfo) -> u32 {
+    if !info.colored.is_empty() {
+        println!("{} have color", info.colored.len())
+    }
+    let mut smallest_point = u32::MAX;
+    let mut point_sizes: BTreeMap<u32, Vec<char>> = BTreeMap::new();
+    for ((num, denom), chars) in &info.scales {
+        let top = num * 12;
+        let gcd = num::integer::gcd(top, *denom);
+        let point_size = top / gcd;
+        smallest_point = smallest_point.min(point_size);
+        point_sizes.entry(point_size).or_default().extend(chars);
+    }
+    for (point, chars) in &point_sizes {
+        println!(
+            "{} will look pixel-perfect at font size multiples of {}px",
+            chars.len(),
+            point
+        );
+    }
+    if let Some(lcm) = point_sizes.keys().copied().reduce(num::integer::lcm) {
+        println!(
+            "All characters in this font will look pixel-perfect at font size multiples of {}px",
+            lcm
+        );
+    }
+    smallest_point
 }
 
 fn positions() -> FontPositions {
