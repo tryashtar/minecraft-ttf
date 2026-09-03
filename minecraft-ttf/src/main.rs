@@ -7,7 +7,10 @@ use std::{
     str::FromStr,
 };
 
-use bitmap_ttf::font::{FontPositions, MakeFontError, make_font};
+use bitmap_ttf::{
+    bitmap::Bitmap,
+    font::{FontPositions, MakeFontError, make_font},
+};
 use clap::Parser;
 use image::GenericImageView;
 use tracing::error;
@@ -433,6 +436,10 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     let positions = positions();
+    let missing_glyph = info
+        .version
+        .supports_missing_glyph()
+        .then(|| missing_glyph());
     for identifier in &args.identifiers {
         let id_info = identifier.info();
         let providers = versions::get_providers(
@@ -459,6 +466,7 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
                         &style_info,
                         &providers,
                         &positions,
+                        missing_glyph.as_ref(),
                         id_info.name.clone(),
                         Some(id_info.created),
                         &out_file,
@@ -470,17 +478,31 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     Ok(())
 }
 
+fn missing_glyph() -> Bitmap {
+    let (mw, mh) = (5, 8);
+    let mut bitmap = Bitmap::new(mw, mh);
+    for y in 0..mh {
+        for x in 0..mw {
+            if x == 0 || y == 0 || x == mw - 1 || y == mh - 1 {
+                bitmap.set(x, y, true);
+            }
+        }
+    }
+    bitmap
+}
+
 fn generate_font(
     style_info: &StyleInfo,
     providers: &providers::Providers,
     positions: &FontPositions,
+    missing_glyph: Option<&Bitmap>,
     name: String,
     created: Option<jiff::Timestamp>,
     path: &Path,
 ) -> Result<(), CommandError> {
     let info = create_font(
         providers.providers.iter(),
-        None,
+        missing_glyph,
         style_info.bold,
         style_info.italic,
     )

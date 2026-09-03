@@ -93,6 +93,12 @@ pub struct MinecraftVersion {
     pub asset_mount: PathBuf,
 }
 
+impl MinecraftVersion {
+    pub fn supports_missing_glyph(&self) -> bool {
+        matches!(self.providers, ProviderSupport::Supported(_))
+    }
+}
+
 #[derive(Debug)]
 struct LegacyUnifont {
     template: String,
