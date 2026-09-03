@@ -19,6 +19,35 @@ pub enum VanillaFontId {
     Uniform,
 }
 
+impl VanillaFontId {
+    pub fn info(self) -> FontIdInfo {
+        match self {
+            Self::Default => FontIdInfo {
+                name: String::from("Minecraft Default"),
+                created: jiff::Timestamp::constant(1_242_492_720, 0),
+            },
+            Self::Alt => FontIdInfo {
+                name: String::from("Minecraft Enchanting"),
+                created: jiff::Timestamp::constant(1_317_913_020, 0),
+            },
+            Self::Illageralt => FontIdInfo {
+                name: String::from("Minecraft Illager Runes"),
+                created: jiff::Timestamp::constant(1_631_721_870, 0),
+            },
+            Self::Uniform => FontIdInfo {
+                name: String::from("Minecraft Unicode"),
+                created: jiff::Timestamp::constant(1_323_360_326, 0),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FontIdInfo {
+    pub name: String,
+    pub created: jiff::Timestamp,
+}
+
 impl TryFrom<&providers::Identifier> for VanillaFontId {
     type Error = ();
 
@@ -490,7 +519,8 @@ impl HardcodedCharsBuilder {
     }
 
     fn build(self) -> ndarray::Array2<Option<char>> {
-        ndarray::Array2::from_shape_vec((self.width, self.height), self.chars).unwrap()
+        ndarray::Array2::from_shape_vec((self.width, self.height), self.chars)
+            .expect("Versions should be configured correctly")
     }
 }
 
@@ -580,9 +610,13 @@ fn legacy_bitmap(
             times.update(lines.modified_time);
             let content = split_grid(lines.data.iter(), false)?;
             let mut array = ndarray::Array2::from_elem((2, content.ncols()), None);
-            array.append(ndarray::Axis(0), content.view()).unwrap();
+            array
+                .append(ndarray::Axis(0), content.view())
+                .expect("Shape matches");
             let blank_rows = ndarray::Array2::from_elem((5, array.ncols()), None);
-            array.append(ndarray::Axis(0), blank_rows.view()).unwrap();
+            array
+                .append(ndarray::Axis(0), blank_rows.view())
+                .expect("Shape matches");
             providers::image_grid(&image.data, &array, None, |x| options.include_char(x))
         }
         CharSource::Hardcoded(array) => {

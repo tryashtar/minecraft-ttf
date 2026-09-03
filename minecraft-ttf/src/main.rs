@@ -15,7 +15,7 @@ use tracing_subscriber::layer::SubscriberExt;
 
 use crate::{
     cache::AssetStorage,
-    font::{FontInfo, Style, create_font, font_meta},
+    font::{FontInfo, Style, StyleInfo, create_font, font_meta},
     versions::VanillaFontId,
 };
 
@@ -311,8 +311,11 @@ fn setup_logging() {
     tracing_subscriber::util::SubscriberInitExt::init(
         tracing_subscriber::registry()
             .with(
-                tracing_subscriber::filter::EnvFilter::from_default_env()
-                    .add_directive(concat!(env!("CARGO_PKG_NAME"), "=debug").parse().unwrap()),
+                tracing_subscriber::filter::EnvFilter::from_default_env().add_directive(
+                    concat!(env!("CARGO_PKG_NAME"), "=debug")
+                        .parse()
+                        .expect("Hardcoded env"),
+                ),
             )
             .with(tracing_tree::HierarchicalLayer::new(2)),
     );
@@ -341,6 +344,8 @@ enum CommandError {
     UnknownVersion,
     #[error(transparent)]
     Font(#[from] MakeFontError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 fn run(command: Command) -> Result<(), CommandError> {
@@ -429,6 +434,7 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     let positions = positions();
     for identifier in &args.identifiers {
+        let id_info = identifier.info();
         let providers = versions::get_providers(
             &info.version,
             &mut stack,
@@ -440,32 +446,23 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
                 println!("No providers found for {}", identifier);
             }
             Some(providers) => {
+                println!("Generating {}", identifier);
                 for style in &args.generate_args.styles {
                     let style_info = style.info();
-                    let info = create_font(
-                        providers.providers.iter(),
-                        None,
-                        style_info.bold,
-                        style_info.italic,
-                    )
-                    .unwrap();
-                    let smallest_legible = print_info(&info);
-                    let meta = font_meta(
-                        String::from("test"),
-                        style_info,
-                        info.font_em,
-                        jiff::Timestamp::constant(0, 0),
-                        providers.times.newest.unwrap(),
+                    let ttf_name = format!(
+                        "{}-{}.ttf",
+                        id_info.name.replace(' ', ""),
+                        style_info.name.replace(' ', "")
                     );
-                    let data = make_font(
-                        meta,
+                    let out_file = args.generate_args.output.join(ttf_name);
+                    generate_font(
+                        &style_info,
+                        &providers,
                         &positions,
-                        smallest_legible as u16,
-                        &info.chars,
-                        &info.missing_glyph,
-                    )
-                    .unwrap();
-                    std::fs::write("test.ttf", &data).unwrap();
+                        id_info.name.clone(),
+                        Some(id_info.created),
+                        &out_file,
+                    )?;
                 }
             }
         }
@@ -473,12 +470,50 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn print_info(info: &FontInfo) -> u32 {
+fn generate_font(
+    style_info: &StyleInfo,
+    providers: &providers::Providers,
+    positions: &FontPositions,
+    name: String,
+    created: Option<jiff::Timestamp>,
+    path: &Path,
+) -> Result<(), CommandError> {
+    let info = create_font(
+        providers.providers.iter(),
+        None,
+        style_info.bold,
+        style_info.italic,
+    )
+    .map_err(MakeFontError::Coords)?;
+    let (sizes, smallest_legible) = get_pixel_info(&info);
+    print_pixel_info(&sizes);
+    let created = match created {
+        Some(created) => created,
+        None => providers.times.oldest.ok_or(MakeFontError::Timestamp)?,
+    };
+    let modified = providers.times.newest.ok_or(MakeFontError::Timestamp)?;
+    let meta = font_meta(name, style_info, info.font_em, created, modified);
+    let mut data = make_font(
+        meta,
+        positions,
+        smallest_legible,
+        &info.chars,
+        &info.missing_glyph,
+    )?;
+    let bytes = data.build();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, &bytes)?;
+    Ok(())
+}
+
+fn get_pixel_info(info: &FontInfo) -> (BTreeMap<u16, Vec<char>>, u16) {
     if !info.colored.is_empty() {
         println!("{} have color", info.colored.len())
     }
-    let mut smallest_point = u32::MAX;
-    let mut point_sizes: BTreeMap<u32, Vec<char>> = BTreeMap::new();
+    let mut smallest_point = u16::MAX;
+    let mut point_sizes: BTreeMap<u16, Vec<char>> = BTreeMap::new();
     for ((num, denom), chars) in &info.scales {
         let top = num * 12;
         let gcd = num::integer::gcd(top, *denom);
@@ -486,7 +521,11 @@ fn print_info(info: &FontInfo) -> u32 {
         smallest_point = smallest_point.min(point_size);
         point_sizes.entry(point_size).or_default().extend(chars);
     }
-    for (point, chars) in &point_sizes {
+    (point_sizes, smallest_point)
+}
+
+fn print_pixel_info(point_sizes: &BTreeMap<u16, Vec<char>>) {
+    for (point, chars) in point_sizes {
         println!(
             "{} will look pixel-perfect at font size multiples of {}px",
             chars.len(),
@@ -499,7 +538,6 @@ fn print_info(info: &FontInfo) -> u32 {
             lcm
         );
     }
-    smallest_point
 }
 
 fn positions() -> FontPositions {

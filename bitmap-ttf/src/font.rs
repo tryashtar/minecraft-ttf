@@ -86,6 +86,8 @@ pub enum MakeFontError {
     Builder(#[from] write_fonts::error::BuilderError),
     #[error(transparent)]
     Coords(#[from] CoordsError),
+    #[error("Missing timestamp")]
+    Timestamp,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -102,13 +104,13 @@ pub enum CoordsError {
 
 pub type CharMap = indexmap::IndexMap<char, GlyphInfo>;
 
-pub fn make_font(
+pub fn make_font<'a>(
     meta: FontMeta,
     positions: &FontPositions,
     smallest_legible: u16,
     chars: &CharMap,
     notdef: &GlyphInfo,
-) -> Result<Vec<u8>, MakeFontError> {
+) -> Result<FontBuilder<'a>, MakeFontError> {
     let mut builder = FontBuilder::new();
     let (loca_format, glyph_count, largest) = add_glyphs(&mut builder, chars, notdef)?;
     add_metrics(
@@ -120,7 +122,7 @@ pub fn make_font(
         smallest_legible,
         loca_format,
     )?;
-    Ok(builder.build())
+    Ok(builder)
 }
 
 fn translate_glyph(glyph: &mut SimpleGlyph, offset_x: i16, offset_y: i16) {
@@ -183,11 +185,15 @@ impl GlyphBuilder {
         &mut self,
         glyph: &SimpleGlyph,
         advance: u16,
-    ) -> Result<u16, write_fonts::error::Error> {
+    ) -> Result<u16, MakeFontError> {
         self.builder.add_glyph(glyph)?;
-        self.max_contours = self.max_contours.max(glyph.contours.len() as u16);
+        self.max_contours = self
+            .max_contours
+            .max(glyph.contours.len().to_u16().ok_or(CoordsError::SizeCast)?);
         for contour in glyph.contours.iter() {
-            self.max_points = self.max_points.max(contour.len() as u16);
+            self.max_points = self
+                .max_points
+                .max(contour.len().to_u16().ok_or(CoordsError::SizeCast)?);
         }
         Ok(self.next(advance))
     }

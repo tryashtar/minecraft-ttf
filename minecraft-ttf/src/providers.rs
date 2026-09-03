@@ -592,7 +592,7 @@ fn convert_bitmap_provider(
     let chars = char_images
         .into_iter()
         .map(|(char, (content_box, bitmap))| {
-            debug!("{} ({:04X}):\n{}", char, char as u32, bitmap);
+            debug!("{} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
             let advance = normal_advance(&bitmap, height);
             let img = CharImage {
                 content_box,
@@ -645,7 +645,7 @@ fn convert_unihex_provider(
             continue;
         }
         let bitmap = unihex_bitmap(art)?;
-        debug!("{} ({:04X}):\n{}", char, char as u32, bitmap);
+        debug!("{} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
         let (left, right) = unifont_char_size(
             char,
             &bitmap,
@@ -735,8 +735,8 @@ fn unihex_bitmap(art: &str) -> Result<Bitmap, UnihexError> {
     let bytes = hex::decode(art)?;
     let bits = bitmap_ttf::bitvec::vec::BitVec::from_vec(bytes);
     let bitmap = match bits.len() {
-        128 => Bitmap::from_array(8, 16, bits).unwrap(),
-        256 => Bitmap::from_array(16, 16, bits).unwrap(),
+        128 => Bitmap::from_array(8, 16, bits).expect("8 * 16 = 128"),
+        256 => Bitmap::from_array(16, 16, bits).expect("16 * 16 = 256"),
         other => {
             return Err(UnihexError::InvalidDimensions(other));
         }

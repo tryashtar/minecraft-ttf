@@ -58,7 +58,7 @@ pub fn trace(graph: &BitmapGraph) -> Vec<Vec<(usize, usize)>> {
         let start_node = component
             .iter()
             .min_by_key(|x| swap_pair(graph[**x]))
-            .unwrap();
+            .expect("All components are non-empty");
         let circuit = hierholzer_euler_circuit(&mut adjacencies, *start_node);
         let points = circuit.into_iter().map(|x| graph[x]).collect();
         result.push(points);
@@ -95,12 +95,18 @@ fn hierholzer_euler_circuit(
             .copied()
         {
             stack.push(current);
-            adjacencies.get_mut(&current).unwrap().remove(&neighbor);
-            adjacencies.get_mut(&neighbor).unwrap().remove(&current);
+            adjacencies
+                .get_mut(&current)
+                .expect("This index is in the map")
+                .remove(&neighbor);
+            adjacencies
+                .get_mut(&neighbor)
+                .expect("This index is in the map")
+                .remove(&current);
             current = neighbor;
         } else {
             circuit.push_front(current);
-            current = stack.pop().unwrap();
+            current = stack.pop().expect("The stack is not empty");
         }
     }
     circuit

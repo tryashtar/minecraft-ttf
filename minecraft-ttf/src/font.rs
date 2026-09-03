@@ -22,22 +22,22 @@ pub enum Style {
 impl Style {
     pub fn info(self) -> StyleInfo {
         match self {
-            Style::Regular => StyleInfo {
+            Self::Regular => StyleInfo {
                 name: "Regular",
                 bold: false,
                 italic: false,
             },
-            Style::Bold => StyleInfo {
+            Self::Bold => StyleInfo {
                 name: "Bold",
                 bold: true,
                 italic: false,
             },
-            Style::Italic => StyleInfo {
+            Self::Italic => StyleInfo {
                 name: "Italic",
                 bold: false,
                 italic: true,
             },
-            Style::BoldItalic => StyleInfo {
+            Self::BoldItalic => StyleInfo {
                 name: "Bold Italic",
                 bold: true,
                 italic: true,
@@ -68,7 +68,7 @@ impl Display for Style {
 pub struct FontInfo {
     pub chars: CharMap,
     pub missing_glyph: GlyphInfo,
-    pub scales: HashMap<(u32, u32), Vec<char>>,
+    pub scales: HashMap<(u16, u16), Vec<char>>,
     pub colored: Vec<char>,
     pub font_em: u16,
 }
@@ -150,10 +150,19 @@ pub fn create_font<'a>(
                         colored.push(*char);
                         let image_segment = image::GenericImageView::view(
                             &provider.image,
-                            data.content_box.left as u32,
-                            data.content_box.top as u32,
-                            data.content_box.width as u32,
-                            data.content_box.height as u32,
+                            data.content_box
+                                .left
+                                .to_u32()
+                                .ok_or(CoordsError::SizeCast)?,
+                            data.content_box.top.to_u32().ok_or(CoordsError::SizeCast)?,
+                            data.content_box
+                                .width
+                                .to_u32()
+                                .ok_or(CoordsError::SizeCast)?,
+                            data.content_box
+                                .height
+                                .to_u32()
+                                .ok_or(CoordsError::SizeCast)?,
                         );
                         let planes = colors_to_bitmaps(image_segment, 10);
                         planes
@@ -204,12 +213,12 @@ fn space_glyph(width: u16) -> GlyphInfo {
 }
 
 fn add_scale(
-    scales: &mut HashMap<(u32, u32), Vec<char>>,
+    scales: &mut HashMap<(u16, u16), Vec<char>>,
     char: char,
     bitmap_height: usize,
     height: i32,
 ) -> Result<(), CoordsError> {
-    let bitmap_height = bitmap_height.to_u32().ok_or(CoordsError::SizeCast)?;
+    let bitmap_height = bitmap_height.to_u16().ok_or(CoordsError::SizeCast)?;
     let height = height.try_into().map_err(CoordsError::IntCast)?;
     scales
         .entry((bitmap_height, height))
@@ -390,7 +399,7 @@ fn collinear(p1: &CurvePoint, p2: &CurvePoint, p3: &CurvePoint) -> bool {
 
 pub fn font_meta(
     name: String,
-    style: StyleInfo,
+    style: &StyleInfo,
     font_em: u16,
     created: jiff::Timestamp,
     modified: jiff::Timestamp,
