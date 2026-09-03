@@ -2,12 +2,8 @@ use std::collections::BTreeMap;
 
 use num_traits::ToPrimitive;
 use read_fonts::{
-    tables::{
-        cmap::PlatformId,
-        glyf::{Anchor, CurvePoint, Transform},
-        head::Flags,
-    },
-    types::Version16Dot16,
+    tables::{cmap::PlatformId, glyf::CurvePoint, head::Flags},
+    types::{UfWord, Version16Dot16},
 };
 use tracing::{Level, debug, span};
 use write_fonts::{
@@ -16,9 +12,7 @@ use write_fonts::{
         cmap::{Cmap, Cmap4, Cmap12, CmapSubtable, EncodingRecord, SequentialMapGroup},
         colr::{BaseGlyph, Colr, Layer},
         cpal::{ColorRecord, Cpal},
-        glyf::{
-            Bbox, Component, ComponentFlags, CompositeGlyph, GlyfLocaBuilder, Glyph, SimpleGlyph,
-        },
+        glyf::{Bbox, GlyfLocaBuilder, Glyph, SimpleGlyph},
         head::{Head, MacStyle},
         hhea::Hhea,
         hmtx::Hmtx,
@@ -55,7 +49,7 @@ impl GlyphInfo {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ColoredLayer {
     pub glyph: SimpleGlyph,
     pub color: ColorRecord,
@@ -106,22 +100,23 @@ pub enum CoordsError {
     IntAdd,
 }
 
+pub type CharMap = indexmap::IndexMap<char, GlyphInfo>;
+
 pub fn make_font(
     meta: FontMeta,
     positions: &FontPositions,
     smallest_legible: u16,
-    chars: &BTreeMap<char, GlyphInfo>,
-    notdef: &SimpleGlyph,
+    chars: &CharMap,
+    notdef: &GlyphInfo,
 ) -> Result<Vec<u8>, MakeFontError> {
     let mut builder = FontBuilder::new();
-    let (loca_format, glyph_count, widest, tallest) = add_glyphs(&mut builder, chars, notdef)?;
+    let (loca_format, glyph_count, largest) = add_glyphs(&mut builder, chars, notdef)?;
     add_metrics(
         &mut builder,
         meta,
         positions,
         glyph_count,
-        widest,
-        tallest,
+        largest,
         smallest_legible,
         loca_format,
     )?;
@@ -219,8 +214,8 @@ impl GlyphBuilder {
 
 #[derive(Debug, Default)]
 struct CmapBuilder {
-    low_pairs: indexmap::IndexMap<u16, u16>,
-    all_pairs: indexmap::IndexMap<char, u16>,
+    low_pairs: BTreeMap<u16, u16>,
+    all_pairs: BTreeMap<char, u16>,
 }
 
 impl CmapBuilder {
@@ -234,7 +229,7 @@ impl CmapBuilder {
     fn build(&self) -> Cmap {
         let mut records = vec![];
         if !self.low_pairs.is_empty() {
-            let cmap4 = build_cmap4(self.low_pairs.iter().map(|(a, b)| (*a, *b)));
+            let cmap4 = build_cmap4(&self.low_pairs);
             records.push(EncodingRecord::new(
                 PlatformId::Unicode,
                 3,
@@ -247,7 +242,7 @@ impl CmapBuilder {
             ));
         }
         if self.all_pairs.len() > self.low_pairs.len() {
-            let cmap12 = build_cmap12(self.all_pairs.iter().map(|(a, b)| (*a, *b)));
+            let cmap12 = build_cmap12(&self.all_pairs);
             records.push(EncodingRecord::new(
                 PlatformId::Unicode,
                 3,
@@ -268,6 +263,7 @@ struct Cmap4Range {
     start: u16,
     end: u16,
     start_glyph: u16,
+    end_glyph: u16,
 }
 
 #[derive(Debug, Default)]
@@ -283,13 +279,16 @@ impl Cmap4RangeBuilder {
     fn consume(&mut self, char: u16, glyph: u16) {
         if let Some(current) = self.current_range.as_mut()
             && current.end + 1 == char
+            && current.end_glyph + 1 == glyph
         {
             current.end = char;
+            current.end_glyph = glyph;
         } else {
             let new_row = Cmap4Range {
                 start: char,
                 end: char,
                 start_glyph: glyph,
+                end_glyph: glyph,
             };
             if let Some(old) = self.current_range.replace(new_row) {
                 self.push(old);
@@ -303,6 +302,7 @@ impl Cmap4RangeBuilder {
             start,
             end,
             start_glyph,
+            end_glyph: _,
         }: Cmap4Range,
     ) {
         debug!(
@@ -337,12 +337,12 @@ impl Cmap4RangeBuilder {
     }
 }
 
-fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
+fn build_cmap4(pairs: &BTreeMap<u16, u16>) -> Cmap4 {
     let span = span!(Level::DEBUG, "building cmap4");
     let _guard = span.enter();
     let mut builder = Cmap4RangeBuilder::default();
     for (char, glyph) in pairs {
-        builder.consume(char, glyph);
+        builder.consume(*char, *glyph);
     }
     builder.done();
     debug!("{} ranges", builder.end_code.len());
@@ -356,24 +356,45 @@ fn build_cmap4(pairs: impl Iterator<Item = (u16, u16)>) -> Cmap4 {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+struct Cmap12Range {
+    start: u32,
+    end: u32,
+    start_glyph: u16,
+    end_glyph: u16,
+}
+
+impl From<Cmap12Range> for SequentialMapGroup {
+    fn from(val: Cmap12Range) -> Self {
+        SequentialMapGroup {
+            start_char_code: val.start,
+            end_char_code: val.end,
+            start_glyph_id: val.start_glyph.into(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct Cmap12RangeBuilder {
     ranges: Vec<SequentialMapGroup>,
-    current_range: Option<SequentialMapGroup>,
+    current_range: Option<Cmap12Range>,
 }
 
 impl Cmap12RangeBuilder {
     fn consume(&mut self, char: char, glyph: u16) {
         let char_u32 = char.into();
         if let Some(current) = self.current_range.as_mut()
-            && current.end_char_code + 1 == char_u32
+            && current.end + 1 == char_u32
+            && current.end_glyph + 1 == glyph
         {
-            current.end_char_code = char_u32;
+            current.end = char_u32;
+            current.end_glyph = glyph;
         } else {
-            let new_row = SequentialMapGroup {
-                start_char_code: char_u32,
-                end_char_code: char_u32,
-                start_glyph_id: glyph.into(),
+            let new_row = Cmap12Range {
+                start: char_u32,
+                end: char_u32,
+                start_glyph: glyph,
+                end_glyph: glyph,
             };
             if let Some(old) = self.current_range.replace(new_row) {
                 self.push(old);
@@ -381,16 +402,16 @@ impl Cmap12RangeBuilder {
         }
     }
 
-    fn push(&mut self, range: SequentialMapGroup) {
+    fn push(&mut self, range: Cmap12Range) {
         debug!(
             "range from {} ({:04X}) to {} ({:04X}) ({} chars)",
-            char::from_u32(range.start_char_code).unwrap_or('\0'),
-            range.start_char_code,
-            char::from_u32(range.end_char_code).unwrap_or('\0'),
-            range.end_char_code,
-            range.end_char_code - range.start_char_code + 1
+            char::from_u32(range.start).unwrap_or('\0'),
+            range.start,
+            char::from_u32(range.end).unwrap_or('\0'),
+            range.end,
+            range.end - range.start + 1
         );
-        self.ranges.push(range);
+        self.ranges.push(range.into());
     }
 
     fn done(&mut self) {
@@ -400,12 +421,12 @@ impl Cmap12RangeBuilder {
     }
 }
 
-fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
+fn build_cmap12(pairs: &BTreeMap<char, u16>) -> Cmap12 {
     let span = span!(Level::DEBUG, "building cmap12");
     let _guard = span.enter();
     let mut builder = Cmap12RangeBuilder::default();
     for (char, glyph) in pairs {
-        builder.consume(char, glyph);
+        builder.consume(*char, *glyph);
     }
     builder.done();
     debug!("{} ranges", builder.ranges.len());
@@ -415,193 +436,203 @@ fn build_cmap12(pairs: impl Iterator<Item = (char, u16)>) -> Cmap12 {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct GlyphSize {
-    start_box: Bbox,
-    start_advance: i16,
-    largest_box: Bbox,
-    largest_advance: i16,
+    bounds: Bbox,
+    advance: u16,
 }
 
-impl GlyphSize {
-    fn new(size: Bbox, advance: u16) -> Self {
+#[derive(Debug, Default)]
+struct TrackedGlyphSize {
+    start: GlyphSize,
+    largest: GlyphSize,
+}
+
+impl TrackedGlyphSize {
+    fn new(start: GlyphSize) -> Self {
         Self {
-            start_box: size,
-            start_advance: advance as i16,
-            largest_box: size,
-            largest_advance: advance as i16,
+            start: start.clone(),
+            largest: start,
         }
     }
 
     fn update(&mut self, offset: (i16, i16)) -> Result<(), CoordsError> {
         let (ox, oy) = offset;
-        self.largest_box.x_max = self.largest_box.x_max.max(
-            self.start_box
-                .x_max
+        let mut modified_box = self.start.bounds;
+        translate_bbox(&mut modified_box, ox, oy);
+        self.largest.advance = self.largest.advance.max(
+            TryInto::<i16>::try_into(self.start.advance)
+                .map_err(CoordsError::IntCast)?
                 .checked_add(ox)
-                .ok_or(CoordsError::IntAdd)?,
-        );
-        self.largest_box.x_min = self.largest_box.x_min.min(
-            self.start_box
-                .x_min
-                .checked_add(ox)
-                .ok_or(CoordsError::IntAdd)?,
-        );
-        self.largest_box.y_max = self.largest_box.y_max.max(
-            self.start_box
-                .y_max
-                .checked_add(oy)
-                .ok_or(CoordsError::IntAdd)?,
-        );
-        self.largest_box.y_min = self.largest_box.y_min.min(
-            self.start_box
-                .y_min
-                .checked_add(oy)
-                .ok_or(CoordsError::IntAdd)?,
-        );
-        self.largest_advance = self.largest_advance.max(
-            self.start_advance
-                .checked_add(ox)
-                .ok_or(CoordsError::IntAdd)?,
+                .ok_or(CoordsError::IntAdd)?
+                .try_into()
+                .map_err(CoordsError::IntCast)?,
         );
         Ok(())
     }
 }
 
+#[derive(Default)]
+struct GlyphAndColorBuilder {
+    glyph_builder: GlyphBuilder,
+    largest: GlyphSize,
+    color_pieces: Vec<ColorPiece>,
+}
+
+#[derive(Debug)]
+struct ColorPiece {
+    for_glyph_id: u16,
+    advance: u16,
+    layers: Vec<ColoredLayer>,
+    offsets: Vec<(i16, i16)>,
+}
+
+impl GlyphAndColorBuilder {
+    fn import(&mut self, info: &GlyphInfo) -> Result<u16, MakeFontError> {
+        let (glyph_index, size) = add_glyph(
+            &mut self.glyph_builder,
+            info.base_layer.as_ref(),
+            &info.base_offsets,
+            info.width,
+        )?;
+        if !info.colored_layers.is_empty() {
+            self.color_pieces.push(ColorPiece {
+                for_glyph_id: glyph_index,
+                advance: size.advance,
+                layers: info.colored_layers.clone(),
+                offsets: info.colored_offsets.clone(),
+            });
+        }
+        self.largest.bounds = self.largest.bounds.union(size.bounds);
+        self.largest.advance = self.largest.advance.max(size.advance);
+        Ok(glyph_index)
+    }
+
+    fn build_color(&mut self) -> Result<Option<(Cpal, Colr)>, MakeFontError> {
+        let mut palettes = vec![];
+        let mut color_base_records = vec![];
+        let mut color_layer_records = vec![];
+        let mut next_color_index = 0u16;
+        for piece in self.color_pieces.iter() {
+            let num_layers = (piece.layers.len() * piece.offsets.len())
+                .to_u16()
+                .ok_or(CoordsError::SizeCast)?;
+            color_base_records.push(BaseGlyph {
+                glyph_id: GlyphId16::new(piece.for_glyph_id),
+                first_layer_index: next_color_index,
+                num_layers,
+            });
+            next_color_index = next_color_index
+                .checked_add(num_layers)
+                .ok_or(CoordsError::IntAdd)?;
+            for layer in piece.layers.iter() {
+                let palette_index = match palettes.iter().position(|x| x == &layer.color) {
+                    None => {
+                        palettes.push(layer.color.clone());
+                        palettes.len() - 1
+                    }
+                    Some(index) => index,
+                }
+                .to_u16()
+                .ok_or(CoordsError::SizeCast)?;
+                for (x, y) in piece.offsets.iter() {
+                    let mut cloned = layer.glyph.clone();
+                    translate_glyph(&mut cloned, *x, *y);
+                    let glyph_index = self
+                        .glyph_builder
+                        .add_simple_glyph(&cloned, piece.advance)?;
+                    color_layer_records.push(Layer {
+                        glyph_id: GlyphId16::new(glyph_index),
+                        palette_index,
+                    });
+                }
+            }
+        }
+        if !palettes.is_empty() {
+            let cpal = Cpal::new(
+                palettes.len().to_u16().ok_or(CoordsError::SizeCast)?,
+                1,
+                palettes.len().to_u16().ok_or(CoordsError::SizeCast)?,
+                Some(palettes),
+                vec![0],
+            );
+            let color_layer_len = color_layer_records
+                .len()
+                .to_u16()
+                .ok_or(CoordsError::SizeCast)?;
+            let colr = Colr::new(
+                color_base_records
+                    .len()
+                    .to_u16()
+                    .ok_or(CoordsError::SizeCast)?,
+                Some(color_base_records),
+                Some(color_layer_records),
+                color_layer_len,
+            );
+            Ok(Some((cpal, colr)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 fn add_glyphs(
     builder: &mut FontBuilder,
-    chars: &BTreeMap<char, GlyphInfo>,
-    notdef: &SimpleGlyph,
-) -> Result<(LocaFormat, u16, i16, i16), MakeFontError> {
-    let mut glyph_builder = GlyphBuilder::default();
+    chars: &CharMap,
+    notdef: &GlyphInfo,
+) -> Result<(LocaFormat, u16, GlyphSize), MakeFontError> {
+    let mut glyph_builder = GlyphAndColorBuilder::default();
     let mut cmap_builder = CmapBuilder::default();
-    let mut palettes = vec![];
-    let mut color_base_records = vec![];
-    let mut color_layer_records = vec![];
-    let mut widest = 0i16;
-    let mut tallest = 0i16;
-    glyph_builder.add_simple_glyph(notdef, 0)?;
-    let mut color_pieces = vec![];
+    glyph_builder.import(notdef)?;
     for (char, info) in chars.iter() {
-        let bbox = info.base_layer.as_ref().map(|x| x.bbox).unwrap_or_default();
-        let mut size = GlyphSize::new(bbox, info.width);
-        let glyph_index = match (&info.base_layer, info.base_offsets.as_slice()) {
-            (None, _) | (_, []) => glyph_builder.add_empty_glyph(
-                size.largest_advance
-                    .try_into()
-                    .map_err(CoordsError::IntCast)?,
-            )?,
-            (Some(layer), [(0, 0)]) => glyph_builder.add_simple_glyph(
-                layer,
-                size.largest_advance
-                    .try_into()
-                    .map_err(CoordsError::IntCast)?,
-            )?,
-            (Some(layer), offsets) => {
-                let mut contours = vec![];
-                for (x, y) in offsets {
-                    size.update((*x, *y))?;
-                    let mut cloned = layer.clone();
-                    translate_glyph(&mut cloned, *x, *y);
-                    contours.extend(cloned.contours);
-                }
-                let final_glyph = SimpleGlyph {
-                    bbox: size.largest_box,
-                    contours,
-                    instructions: vec![],
-                    overlaps: true,
-                };
-                glyph_builder.add_simple_glyph(
-                    &final_glyph,
-                    size.largest_advance
-                        .try_into()
-                        .map_err(CoordsError::IntCast)?,
-                )?
-            }
-        };
-        let advance = size
-            .largest_advance
-            .try_into()
-            .map_err(CoordsError::IntCast)?;
-        if !info.colored_layers.is_empty() {
-            color_pieces.push((
-                glyph_index,
-                advance,
-                &info.colored_layers,
-                &info.colored_offsets,
-            ));
-        }
+        let glyph_index = glyph_builder.import(info)?;
         cmap_builder.add(*char, glyph_index);
-        widest = widest.max(size.largest_box.x_max);
-        tallest = tallest.max(size.largest_box.y_max);
     }
-    let mut next_color_index = 0u16;
-    for (main_index, advance, layers, offsets) in color_pieces {
-        let num_layers = (layers.len() * offsets.len())
-            .to_u16()
-            .ok_or(CoordsError::SizeCast)?;
-        color_base_records.push(BaseGlyph {
-            glyph_id: GlyphId16::new(main_index),
-            first_layer_index: next_color_index,
-            num_layers,
-        });
-        next_color_index = next_color_index
-            .checked_add(num_layers)
-            .ok_or(CoordsError::IntAdd)?;
-        for layer in layers.iter() {
-            let palette_index = match palettes.iter().position(|x| x == &layer.color) {
-                None => {
-                    palettes.push(layer.color.clone());
-                    palettes.len() - 1
-                }
-                Some(index) => index,
-            }
-            .to_u16()
-            .ok_or(CoordsError::SizeCast)?;
-            for (x, y) in offsets.iter() {
-                let mut cloned = layer.glyph.clone();
-                translate_glyph(&mut cloned, *x, *y);
-                let glyph_index = glyph_builder.add_simple_glyph(&cloned, advance)?;
-                color_layer_records.push(Layer {
-                    glyph_id: GlyphId16::new(glyph_index),
-                    palette_index,
-                });
-            }
-        }
-    }
-    let maxp = glyph_builder.build_maxp();
-    let (glyf, loca, loca_format) = glyph_builder.builder.build();
+    let colors = glyph_builder.build_color()?;
+    let maxp = glyph_builder.glyph_builder.build_maxp();
+    let (glyf, loca, loca_format) = glyph_builder.glyph_builder.builder.build();
     let cmap = cmap_builder.build();
     builder
         .add_table(&glyf)?
         .add_table(&loca)?
-        .add_table(&glyph_builder.hmtx)?
+        .add_table(&glyph_builder.glyph_builder.hmtx)?
         .add_table(&maxp)?
         .add_table(&cmap)?;
-    if !palettes.is_empty() {
-        let cpal = Cpal::new(
-            palettes.len().to_u16().ok_or(CoordsError::SizeCast)?,
-            1,
-            palettes.len().to_u16().ok_or(CoordsError::SizeCast)?,
-            Some(palettes),
-            vec![0],
-        );
-        let color_layer_len = color_layer_records
-            .len()
-            .to_u16()
-            .ok_or(CoordsError::SizeCast)?;
-        let colr = Colr::new(
-            color_base_records
-                .len()
-                .to_u16()
-                .ok_or(CoordsError::SizeCast)?,
-            Some(color_base_records),
-            Some(color_layer_records),
-            color_layer_len,
-        );
-        builder.add_table(&cpal)?.add_table(&colr)?;
+    if let Some((cpal, cmap)) = colors {
+        builder.add_table(&cpal)?.add_table(&cmap)?;
     }
-    Ok((loca_format, maxp.num_glyphs, widest, tallest))
+    Ok((loca_format, maxp.num_glyphs, glyph_builder.largest))
+}
+
+fn add_glyph(
+    builder: &mut GlyphBuilder,
+    glyph: Option<&SimpleGlyph>,
+    offsets: &[(i16, i16)],
+    advance: u16,
+) -> Result<(u16, GlyphSize), MakeFontError> {
+    let bounds = glyph.as_ref().map(|x| x.bbox).unwrap_or_default();
+    let mut size = TrackedGlyphSize::new(GlyphSize { bounds, advance });
+    let glyph_index = match (glyph, offsets) {
+        (None, _) | (_, []) => builder.add_empty_glyph(size.largest.advance)?,
+        (Some(layer), [(0, 0)]) => builder.add_simple_glyph(layer, size.largest.advance)?,
+        (Some(layer), offsets) => {
+            let mut contours = vec![];
+            for (x, y) in offsets {
+                size.update((*x, *y))?;
+                let mut cloned = layer.clone();
+                translate_glyph(&mut cloned, *x, *y);
+                contours.extend(cloned.contours);
+            }
+            let final_glyph = SimpleGlyph {
+                bbox: size.largest.bounds,
+                contours,
+                instructions: vec![],
+                overlaps: true,
+            };
+            builder.add_simple_glyph(&final_glyph, size.largest.advance)?
+        }
+    };
+    Ok((glyph_index, size.largest))
 }
 
 fn add_metrics(
@@ -609,8 +640,7 @@ fn add_metrics(
     meta: FontMeta,
     positions: &FontPositions,
     glyph_count: u16,
-    widest: i16,
-    tallest: i16,
+    largest: GlyphSize,
     smallest_legible: u16,
     loca_format: LocaFormat,
 ) -> Result<(), MakeFontError> {
@@ -629,6 +659,7 @@ fn add_metrics(
     let hhea = Hhea {
         ascender: FWord::new(signed_ascent),
         descender: FWord::new(-signed_descent),
+        advance_width_max: UfWord::new(largest.advance),
         number_of_h_metrics: glyph_count,
         ..Default::default()
     };
@@ -704,10 +735,10 @@ fn add_metrics(
     let epoch = jiff::Timestamp::constant(-2_082_844_800, 0);
     let head = Head {
         units_per_em: meta.em,
-        x_min: 0,
-        x_max: widest,
-        y_min: -signed_descent,
-        y_max: tallest,
+        x_min: largest.bounds.x_min,
+        x_max: largest.bounds.x_max,
+        y_min: largest.bounds.y_min,
+        y_max: largest.bounds.y_max,
         created: LongDateTime::new(meta.created.as_second() - epoch.as_second()),
         modified: LongDateTime::new(meta.modified.as_second() - epoch.as_second()),
         mac_style,

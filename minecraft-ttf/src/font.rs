@@ -1,11 +1,8 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Display,
-};
+use std::{collections::HashMap, fmt::Display};
 
 use bitmap_ttf::{
     bitmap::Bitmap,
-    font::{ColoredLayer, CoordsError, FontMeta, GlyphInfo, Names},
+    font::{CharMap, ColoredLayer, CoordsError, FontMeta, GlyphInfo, Names},
     read_fonts::tables::glyf::CurvePoint,
     vectorize::{PointTracer, full_glyph},
     write_fonts::tables::cpal::ColorRecord,
@@ -69,7 +66,7 @@ impl Display for Style {
 
 #[derive(Debug)]
 pub struct FontInfo {
-    pub chars: BTreeMap<char, GlyphInfo>,
+    pub chars: CharMap,
     pub missing_glyph: GlyphInfo,
     pub scales: HashMap<(u32, u32), Vec<char>>,
     pub colored: Vec<char>,
@@ -83,7 +80,7 @@ pub fn create_font<'a>(
     italic: bool,
 ) -> Result<FontInfo, CoordsError> {
     let mut scales = HashMap::new();
-    let mut chars = BTreeMap::new();
+    let mut chars = CharMap::new();
     let mut colored = vec![];
     let font_em = 1200;
     let pixel_scale = 100.0;
@@ -380,9 +377,7 @@ impl PointTracer for TracePen {
     }
 
     fn done(&mut self) -> Vec<CurvePoint> {
-        if let Some(point) = self.path.first() {
-            self.push_point(*point);
-        }
+        self.path.pop();
         std::mem::take(&mut self.path)
     }
 }

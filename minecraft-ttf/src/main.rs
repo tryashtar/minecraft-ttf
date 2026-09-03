@@ -5,13 +5,9 @@ use std::{
     process::ExitCode,
     range::RangeInclusive,
     str::FromStr,
-    u16,
 };
 
-use bitmap_ttf::{
-    font::{FontPositions, MakeFontError, make_font},
-    write_fonts::tables::glyf::{Glyph, SimpleGlyph},
-};
+use bitmap_ttf::font::{FontPositions, MakeFontError, make_font};
 use clap::Parser;
 use image::GenericImageView;
 use tracing::error;
@@ -466,7 +462,7 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
                         &positions,
                         smallest_legible as u16,
                         &info.chars,
-                        &SimpleGlyph::default(),
+                        &info.missing_glyph,
                     )
                     .unwrap();
                     std::fs::write("test.ttf", &data).unwrap();

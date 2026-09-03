@@ -1,4 +1,7 @@
-use crate::{bitmap::Bitmap, vectorize::bitmap_to_graph};
+use crate::{
+    bitmap::Bitmap,
+    vectorize::{bitmap_to_graph, trace},
+};
 
 #[test]
 fn efficient_square() {
@@ -10,4 +13,8 @@ fn efficient_square() {
     }
     let graph = bitmap_to_graph(&bitmap);
     assert_eq!(graph.node_count(), 24);
+    let paths = trace(&graph);
+    assert_eq!(paths.len(), 1);
+    let path = &paths[0];
+    assert_eq!(path.len(), 25);
 }
