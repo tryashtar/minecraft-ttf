@@ -26,12 +26,13 @@ use write_fonts::{
     types::{FWord, Fixed, GlyphId16, LongDateTime, NameId},
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct GlyphInfo {
     pub width: u16,
     pub height: u16,
     pub base_layer: Option<SimpleGlyph>,
     pub base_offsets: Vec<(i16, i16)>,
+    pub base_color: Option<ColorRecord>,
     pub colored_layers: Vec<ColoredLayer>,
     pub colored_offsets: Vec<(i16, i16)>,
 }
@@ -40,11 +41,7 @@ impl GlyphInfo {
     pub fn empty(width: u16) -> Self {
         Self {
             width,
-            height: 0,
-            base_layer: None,
-            base_offsets: vec![],
-            colored_layers: vec![],
-            colored_offsets: vec![],
+            ..Default::default()
         }
     }
 }
@@ -491,6 +488,7 @@ struct ColorPiece {
     advance: u16,
     layers: Vec<ColoredLayer>,
     offsets: Vec<(i16, i16)>,
+    base: Option<ColorRecord>,
 }
 
 impl GlyphAndColorBuilder {
@@ -501,12 +499,13 @@ impl GlyphAndColorBuilder {
             &info.base_offsets,
             info.width,
         )?;
-        if !info.colored_layers.is_empty() {
+        if !info.colored_layers.is_empty() || info.base_color.is_some() {
             self.color_pieces.push(ColorPiece {
                 for_glyph_id: glyph_index,
                 advance: size.advance,
                 layers: info.colored_layers.clone(),
                 offsets: info.colored_offsets.clone(),
+                base: info.base_color.clone(),
             });
         }
         self.largest.bounds = self.largest.bounds.union(size.bounds);
@@ -519,10 +518,24 @@ impl GlyphAndColorBuilder {
         let mut color_base_records = vec![];
         let mut color_layer_records = vec![];
         let mut next_color_index = 0u16;
+        let mut get_palette_index = |color: &ColorRecord| -> Result<u16, CoordsError> {
+            match palettes.iter().position(|x| x == color) {
+                None => {
+                    palettes.push(color.clone());
+                    palettes.len() - 1
+                }
+                Some(index) => index,
+            }
+            .to_u16()
+            .ok_or(CoordsError::SizeCast)
+        };
         for piece in self.color_pieces.iter() {
-            let num_layers = (piece.layers.len() * piece.offsets.len())
+            let mut num_layers = (piece.layers.len() * piece.offsets.len())
                 .to_u16()
                 .ok_or(CoordsError::SizeCast)?;
+            if piece.base.is_some() {
+                num_layers += 1;
+            }
             color_base_records.push(BaseGlyph {
                 glyph_id: GlyphId16::new(piece.for_glyph_id),
                 first_layer_index: next_color_index,
@@ -531,16 +544,15 @@ impl GlyphAndColorBuilder {
             next_color_index = next_color_index
                 .checked_add(num_layers)
                 .ok_or(CoordsError::IntAdd)?;
+            if let Some(base) = piece.base.as_ref() {
+                let palette_index = get_palette_index(base)?;
+                color_layer_records.push(Layer {
+                    glyph_id: GlyphId16::new(piece.for_glyph_id),
+                    palette_index,
+                });
+            }
             for layer in piece.layers.iter() {
-                let palette_index = match palettes.iter().position(|x| x == &layer.color) {
-                    None => {
-                        palettes.push(layer.color.clone());
-                        palettes.len() - 1
-                    }
-                    Some(index) => index,
-                }
-                .to_u16()
-                .ok_or(CoordsError::SizeCast)?;
+                let palette_index = get_palette_index(&layer.color)?;
                 for (x, y) in piece.offsets.iter() {
                     let mut cloned = layer.glyph.clone();
                     translate_glyph(&mut cloned, *x, *y);

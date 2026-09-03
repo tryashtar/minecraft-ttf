@@ -302,18 +302,24 @@ fn bitmap_glyph(
         }
     };
     let mut colored_paths = vec![];
-    for (bitmap, color) in colored_layers {
-        let path = full_glyph(bitmap, &mut pen)?;
-        colored_paths.push(ColoredLayer {
-            glyph: path,
-            color: color.clone(),
-        });
+    let mut colored_base = None;
+    if colored_layers.len() == 1 {
+        colored_base = Some(colored_layers[0].1.clone());
+    } else {
+        for (bitmap, color) in colored_layers {
+            let path = full_glyph(bitmap, &mut pen)?;
+            colored_paths.push(ColoredLayer {
+                glyph: path,
+                color: color.clone(),
+            });
+        }
     }
     Ok(GlyphInfo {
         width: advance.to_u16().ok_or(CoordsError::FloatCast)?,
         height: char_height.to_u16().ok_or(CoordsError::FloatCast)?,
         base_layer: Some(base_glyph),
         base_offsets: offsets,
+        base_color: colored_base,
         colored_layers: colored_paths,
         colored_offsets: color_offsets,
     })
