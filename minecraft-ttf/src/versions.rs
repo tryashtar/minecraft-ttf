@@ -11,7 +11,8 @@ use crate::{
     storage,
 };
 
-#[derive(clap::ValueEnum, Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(clap::ValueEnum, serde::Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum VanillaFontId {
     Default,
     Alt,
@@ -87,10 +88,26 @@ impl Display for VanillaFontId {
 
 #[derive(Debug)]
 pub struct MinecraftVersion {
-    pub name: &'static str,
+    pub name: String,
     providers: ProviderSupport,
     hardcoded_spaces: Option<BTreeMap<char, f32>>,
     pub asset_mount: PathBuf,
+}
+
+impl Default for MinecraftVersion {
+    fn default() -> Self {
+        Self {
+            name: Default::default(),
+            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
+                chars: CharSource::Hardcoded(ndarray::Array2::default((0, 0))),
+                textures: Default::default(),
+                hardcoded_advances: None,
+                unifont: None,
+            })),
+            hardcoded_spaces: Default::default(),
+            asset_mount: Default::default(),
+        }
+    }
 }
 
 impl MinecraftVersion {
@@ -99,7 +116,7 @@ impl MinecraftVersion {
     }
 }
 
-#[derive(Debug)]
+#[derive(serde::Deserialize, Debug, Clone)]
 struct LegacyUnifont {
     template: String,
     sizes: PathBuf,
@@ -160,7 +177,152 @@ pub struct VersionJson {
     world_version: Option<u32>,
 }
 
+#[derive(serde::Deserialize, Debug)]
+pub struct VersionUpdate {
+    check: VersionCheck,
+    name: String,
+    changes: Vec<VersionChange>,
+}
+
+impl VersionUpdate {
+    fn apply_to(&self, version: &mut MinecraftVersion) {
+        version.name = self.name.clone();
+        for change in self.changes.iter() {
+            change.apply_to(version);
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct VersionCheck {
+    file: Option<String>,
+    no_file: Option<String>,
+    pack_version: Option<u32>,
+    world_version: Option<u32>,
+}
+
+impl VersionCheck {
+    fn passes(&self, names: &HashSet<&str>, version_json: &VersionJson) -> bool {
+        if let Some(file) = self.file.as_ref()
+            && !names.contains(file.as_str())
+        {
+            return false;
+        }
+        if let Some(file) = self.no_file.as_ref()
+            && names.contains(file.as_str())
+        {
+            return false;
+        }
+        if let Some(pack_version) = self.pack_version
+            && !version_json
+                .pack_version
+                .as_ref()
+                .is_some_and(|x| x.as_int() == pack_version)
+        {
+            return false;
+        }
+        if let Some(world_version) = self.world_version
+            && !version_json
+                .world_version
+                .is_some_and(|x| x == world_version)
+        {
+            return false;
+        }
+        true
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum VersionChange {
+    AddTextures(HashMap<VanillaFontId, Option<PathBuf>>),
+    HardcodedSpaces(Option<BTreeMap<char, f32>>),
+    SetChars(SetCharChange),
+    ZeroAdvances(Option<String>),
+    Unifont(LegacyUnifont),
+    AssetMount(PathBuf),
+    Providers(providers::ProviderBehavior),
+}
+
+impl VersionChange {
+    fn get_legacy(version: &mut MinecraftVersion) -> &mut HardcodedFont {
+        match &mut version.providers {
+            ProviderSupport::Supported(_) => {
+                panic!("Versions configured incorrectly")
+            }
+            ProviderSupport::Hardcoded(hardcoded) => hardcoded.as_mut(),
+        }
+    }
+
+    fn apply_to(&self, version: &mut MinecraftVersion) {
+        match self {
+            Self::AddTextures(adding) => {
+                let textures = &mut Self::get_legacy(version).textures;
+                for (id, path) in adding {
+                    textures.insert(*id, path.clone());
+                }
+            }
+            Self::HardcodedSpaces(spaces) => {
+                version.hardcoded_spaces = spaces.clone();
+            }
+            Self::SetChars(char_change) => {
+                let legacy = &mut Self::get_legacy(version);
+                match char_change {
+                    SetCharChange::File(path) => {
+                        legacy.chars = CharSource::FromFile(path.clone());
+                    }
+                    SetCharChange::Hardcoded(items) => {
+                        let mut builder = HardcodedCharsBuilder::new(16, 16);
+                        for item in items {
+                            match item {
+                                CharBuilderEntry::String(str) => {
+                                    builder = builder.add_chars(str);
+                                }
+                                CharBuilderEntry::Blanks(count) => {
+                                    builder = builder.add_blanks(*count);
+                                }
+                            }
+                        }
+                        legacy.chars = CharSource::Hardcoded(builder.build());
+                    }
+                }
+            }
+            Self::ZeroAdvances(data) => {
+                let legacy = &mut Self::get_legacy(version);
+                legacy.hardcoded_advances = data
+                    .as_ref()
+                    .map(|string| string.chars().map(|x| (x, 0.0)).collect());
+            }
+            Self::Unifont(unifont) => {
+                let legacy = &mut Self::get_legacy(version);
+                legacy.unifont = Some(unifont.clone());
+            }
+            Self::AssetMount(path) => {
+                version.asset_mount = path.clone();
+            }
+            Self::Providers(behavior) => {
+                version.providers = ProviderSupport::Supported(behavior.clone());
+            }
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(untagged)]
+enum SetCharChange {
+    File(PathBuf),
+    Hardcoded(Vec<CharBuilderEntry>),
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(untagged)]
+enum CharBuilderEntry {
+    String(String),
+    Blanks(usize),
+}
+
 pub fn detect_version(
+    updates: &[VersionUpdate],
     jar: &mut zip::ZipArchive<impl std::io::Read + std::io::Seek>,
 ) -> Result<MinecraftVersion, VersionError> {
     let version_json: VersionJson = match jar.by_name("version.json") {
@@ -168,325 +330,22 @@ pub fn detect_version(
         Err(zip::result::ZipError::FileNotFound) => VersionJson::default(),
         Err(e) => return Err(VersionError::Zip(e)),
     };
-    if version_json
-        .pack_version
-        .as_ref()
-        .is_some_and(|x| x.as_int() >= 89)
-    {
-        return Ok(MinecraftVersion {
-            name: "26.3-snapshot-1+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::Filter,
-                uneven_unifont: true,
-            }),
-            hardcoded_spaces: None,
-        });
-    }
-    if version_json
-        .pack_version
-        .as_ref()
-        .is_some_and(|x| x.as_int() >= 88)
-        && version_json.world_version.is_some_and(|x| x >= 4896)
-    {
-        return Ok(MinecraftVersion {
-            name: "26.2-pre-3+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::Filter,
-                uneven_unifont: false,
-            }),
-            hardcoded_spaces: None,
-        });
-    }
-    if version_json
-        .pack_version
-        .as_ref()
-        .is_some_and(|x| x.as_int() >= 26)
-    {
-        return Ok(MinecraftVersion {
-            name: "24w06a+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::Filter,
-                uneven_unifont: true,
-            }),
-            hardcoded_spaces: None,
-        });
-    }
-    if version_json
-        .pack_version
-        .as_ref()
-        .is_some_and(|x| x.as_int() >= 9)
-    {
-        return Ok(MinecraftVersion {
-            name: "22w11a+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::SwitchIdentifier,
-                uneven_unifont: true,
-            }),
-            hardcoded_spaces: None,
-        });
-    }
-    if version_json
-        .pack_version
-        .as_ref()
-        .is_some_and(|x| x.as_int() >= 8)
-        && version_json.world_version.is_some_and(|x| x >= 2966)
-    {
-        return Ok(MinecraftVersion {
-            name: "22w03a+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::SwitchIdentifier,
-                uneven_unifont: true,
-            }),
-            hardcoded_spaces: Some(BTreeMap::from([(' ', 4.0), ('\u{200c}', 0.0)])),
-        });
-    }
-    let simple_spaces = Some(BTreeMap::from([(' ', 4.0)]));
-    if version_json
-        .pack_version
-        .as_ref()
-        .is_some_and(|x| x.as_int() >= 5)
-        && version_json.world_version.is_some_and(|x| x >= 2529)
-    {
-        return Ok(MinecraftVersion {
-            name: "20w17a+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::SwitchIdentifier,
-                uneven_unifont: true,
-            }),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
     let names = jar.file_names().collect::<HashSet<_>>();
-    if names.contains("assets/minecraft/font/default.json") {
-        return Ok(MinecraftVersion {
-            name: "1.13-pre7+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Supported(providers::ProviderBehavior {
-                uniform: providers::ForceUniformBehavior::SkipBitmaps,
-                uneven_unifont: true,
-            }),
-            hardcoded_spaces: simple_spaces,
-        });
+    let mut index = None;
+    for i in (0..updates.len()).rev() {
+        if updates[i].check.passes(&names, &version_json) {
+            index = Some(i);
+            break;
+        }
     }
-    let asset_map = HashMap::from([
-        (
-            VanillaFontId::Default,
-            Some(PathBuf::from("assets/minecraft/textures/font/ascii.png")),
-        ),
-        (
-            VanillaFontId::Alt,
-            Some(PathBuf::from(
-                "assets/minecraft/textures/font/ascii_sga.png",
-            )),
-        ),
-        (VanillaFontId::Uniform, None),
-    ]);
-    let new_unifont = Some(LegacyUnifont {
-        template: String::from("assets/minecraft/textures/font/unicode_page_%s.png"),
-        sizes: PathBuf::from("assets/minecraft/font/glyph_sizes.bin"),
-        uneven_spacing: true,
-    });
-    if !names.contains("font.txt") && names.contains("assets/minecraft/textures/font/ascii.png") {
-        let chars = HardcodedCharsBuilder::new(16, 16)
-            .add_chars("ÀÁÂÈÊËÍÓÔÕÚßãõğİıŒœŞşŴŵžȇ")
-            .add_blanks(7)
-            .add_chars(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
-            .add_blanks(1)
-            .add_chars("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αβΓπΣσμτΦΘΩδ∞∅∈∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■")
-            .add_blanks(1)
-            .build();
-        return Ok(MinecraftVersion {
-            name: "13w42b+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::Hardcoded(chars),
-                textures: asset_map,
-                hardcoded_advances: None,
-                unifont: new_unifont,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
+    let Some(index) = index else {
+        return Err(VersionError::UnknownVersion);
+    };
+    let mut version = MinecraftVersion::default();
+    for update in updates.iter().take(index + 1) {
+        update.apply_to(&mut version);
     }
-    if names.contains("assets/minecraft/textures/font/ascii.png") {
-        return Ok(MinecraftVersion {
-            name: "13w24a+",
-            asset_mount: PathBuf::from("assets"),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::FromFile(PathBuf::from("font.txt")),
-                textures: asset_map,
-                hardcoded_advances: None,
-                unifont: new_unifont,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    if names.contains("font/glyph_sizes.bin") {
-        return Ok(MinecraftVersion {
-            name: "11w49a+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::FromFile(PathBuf::from("font.txt")),
-                textures: HashMap::from([
-                    (
-                        VanillaFontId::Default,
-                        Some(PathBuf::from("font/default.png")),
-                    ),
-                    (
-                        VanillaFontId::Alt,
-                        Some(PathBuf::from("font/alternate.png")),
-                    ),
-                    (VanillaFontId::Uniform, None),
-                ]),
-                hardcoded_advances: None,
-                unifont: Some(LegacyUnifont {
-                    template: String::from("font/glyph_%S.png"),
-                    sizes: PathBuf::from("font/glyph_sizes.bin"),
-                    uneven_spacing: true,
-                }),
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    if names.contains("font/alternate.png") {
-        return Ok(MinecraftVersion {
-            name: "b1.9-pre3+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::FromFile(PathBuf::from("font.txt")),
-                textures: HashMap::from([
-                    (
-                        VanillaFontId::Default,
-                        Some(PathBuf::from("font/default.png")),
-                    ),
-                    (
-                        VanillaFontId::Alt,
-                        Some(PathBuf::from("font/alternate.png")),
-                    ),
-                ]),
-                hardcoded_advances: None,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    let simple_map = HashMap::from([(
-        VanillaFontId::Default,
-        Some(PathBuf::from("font/default.png")),
-    )]);
-    if names.contains("font.txt") {
-        return Ok(MinecraftVersion {
-            name: "b1.1+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::FromFile(PathBuf::from("font.txt")),
-                textures: simple_map,
-                hardcoded_advances: None,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    if names.contains("lang/en_US.lang") {
-        let chars = HardcodedCharsBuilder::new(16, 16)
-            .add_blanks(32)
-            .add_chars(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~â")
-            .add_chars("Œ‚Ã‡Ã¼Ã©Ã¢Ã¤Ã\u{00a0}Ã¥Ã§ÃªÃ«Ã¨Ã¯Ã®Ã¬Ã„Ã…Ã‰Ã¦Ã†Ã´Ã¶Ã²Ã»Ã¹Ã¿Ã–ÃœÃ¸Â£Ã˜Ã—Æ’Ã¡Ã\u{00ad}Ã³ÃºÃ±Ã‘ÂªÂºÂ¿Â®Â¬Â½Â¼Â¡Â«")
-            .add_blanks(30)
-            .build();
-        return Ok(MinecraftVersion {
-            name: "b1.0+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::Hardcoded(chars),
-                textures: simple_map,
-                hardcoded_advances: None,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    let alpha_chars = HardcodedCharsBuilder::new(16, 16)
-        .add_blanks(32)
-        .add_chars(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~â")
-        .add_chars("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»")
-        .add_blanks(80)
-        .build();
-    if names.contains("font/default.png") {
-        return Ok(MinecraftVersion {
-            name: "a1.2.2+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::Hardcoded(alpha_chars),
-                textures: simple_map,
-                hardcoded_advances: None,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    if names.contains("mob/cow.png") {
-        return Ok(MinecraftVersion {
-            name: "a1.0.9+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::Hardcoded(alpha_chars),
-                textures: HashMap::from([(
-                    VanillaFontId::Default,
-                    Some(PathBuf::from("default.png")),
-                )]),
-                hardcoded_advances: None,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    let full_chars = HardcodedCharsBuilder::new(16, 16)
-        .add_range('\u{0000}'..='\u{00ff}')
-        .build();
-    let zero_advances = Some(
-        ('\u{0080}'..='\u{00ff}')
-            .map(|x| (x, 0.0))
-            .collect::<HashMap<_, _>>(),
-    );
-    if names.contains("default.png") {
-        return Ok(MinecraftVersion {
-            name: "c0.0.17a+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::Hardcoded(full_chars),
-                textures: HashMap::from([(
-                    VanillaFontId::Default,
-                    Some(PathBuf::from("default.png")),
-                )]),
-                hardcoded_advances: zero_advances,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    if names.contains("default.gif") {
-        return Ok(MinecraftVersion {
-            name: "c0.0.2a+",
-            asset_mount: PathBuf::default(),
-            providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
-                chars: CharSource::Hardcoded(full_chars),
-                textures: HashMap::from([(
-                    VanillaFontId::Default,
-                    Some(PathBuf::from("default.gif")),
-                )]),
-                hardcoded_advances: zero_advances,
-                unifont: None,
-            })),
-            hardcoded_spaces: simple_spaces,
-        });
-    }
-    Err(VersionError::UnknownVersion)
+    Ok(version)
 }
 
 #[derive(Debug, Default)]
@@ -513,13 +372,6 @@ impl HardcodedCharsBuilder {
     fn add_blanks(mut self, num: usize) -> Self {
         for _ in 0..num {
             self.chars.push(None)
-        }
-        self
-    }
-
-    fn add_range(mut self, chars: impl Iterator<Item = char>) -> Self {
-        for char in chars {
-            self.chars.push(Some(char));
         }
         self
     }

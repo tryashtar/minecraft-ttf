@@ -198,6 +198,7 @@ impl ModifiedTimes {
     }
 }
 
+#[derive(Debug)]
 pub struct Providers {
     pub providers: Vec<Provider>,
     pub times: ModifiedTimes,
@@ -446,13 +447,14 @@ struct UnihexSizeOverride {
     right: u32,
 }
 
-#[derive(Debug)]
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct ProviderBehavior {
     pub uniform: ForceUniformBehavior,
     pub uneven_unifont: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(serde::Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
 pub enum ForceUniformBehavior {
     Filter,
     SkipBitmaps,

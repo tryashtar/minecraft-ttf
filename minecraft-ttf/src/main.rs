@@ -349,6 +349,8 @@ enum CommandError {
     Font(#[from] MakeFontError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Yaml(#[from] serde_saphyr::Error),
 }
 
 fn run(command: Command) -> Result<(), CommandError> {
@@ -370,6 +372,7 @@ struct JarInfo<T> {
 
 fn load_jar(
     version: &str,
+    updates: &[versions::VersionUpdate],
     cache: &Path,
 ) -> Result<JarInfo<impl std::io::Read + std::io::Seek + use<>>, CommandError> {
     let manifest = cache::get_manifest(cache)?;
@@ -383,7 +386,7 @@ fn load_jar(
     let launcher_data = cache::get_launcher(version, cache)?;
     let assets = cache::get_asset_source(&launcher_data.asset_index, cache)?;
     let mut jar = cache::get_jar(&launcher_data, cache)?;
-    let version = versions::detect_version(&mut jar)?;
+    let version = versions::detect_version(updates, &mut jar)?;
     Ok(JarInfo {
         launcher: launcher_data,
         jar_store: storage::ZipStorage::new(jar),
@@ -429,8 +432,15 @@ impl providers::ProviderOptions for GenerateArgs {
     }
 }
 
+fn version_checker() -> Result<Vec<versions::VersionUpdate>, serde_saphyr::Error> {
+    let version_yaml = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/versions.yaml"));
+    let versions: Vec<versions::VersionUpdate> = serde_saphyr::from_str(version_yaml)?;
+    Ok(versions)
+}
+
 fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
-    let info = load_jar(&args.version, &args.generic_args.cache)?;
+    let checker = version_checker()?;
+    let info = load_jar(&args.version, &checker, &args.generic_args.cache)?;
     println!("Generating fonts from Minecraft {}", info.launcher.id);
     println!("Font support level {}", info.version.name);
     let mut stack =

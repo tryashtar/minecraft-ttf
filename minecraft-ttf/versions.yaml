@@ -1,0 +1,148 @@
+- check:
+    file: default.gif
+  name: "c0.0.2a+"
+  changes:
+  - add_textures:
+      default: default.gif
+  - hardcoded_spaces:
+      " ": 4.0
+  - set_chars:
+    - "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f"
+    - "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
+    - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f"
+    - "\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f"
+    - "\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f"
+    - "\xa0¡¢£¤¥¦§¨©ª«¬\xad®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+  - zero_advances: "\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0¡¢£¤¥¦§¨©ª«¬\xad®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+- check:
+    file: default.png
+  name: "c0.0.17a+"
+  changes:
+  - add_textures:
+      default: default.png
+- check:
+    file: mob/cow.png
+  name: "a1.0.9+"
+  changes:
+  - set_chars:
+    - 32
+    - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~â"
+    - "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»"
+    - 80
+  - zero_advances: null
+- check:
+    file: font/default.png
+  name: "a1.2.2+"
+  changes:
+  - add_textures:
+      default: font/default.png
+- check:
+    file: lang/en_US.lang
+  name: "b1.0+"
+  changes:
+  - set_chars:
+    - 32
+    - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_'abcdefghijklmnopqrstuvwxyz{|}~\u00e2"
+    - "\u0152\u201a\u00c3\u2021\u00c3\u00bc\u00c3\u00a9\u00c3\u00a2\u00c3\u00a4\u00c3\u00a0\u00c3\u00a5"
+    - "\u00c3\u00a7\u00c3\u00aa\u00c3\u00ab\u00c3\u00a8\u00c3\u00af\u00c3\u00ae\u00c3\u00ac\u00c3\u201e"
+    - "\u00c3\u2026\u00c3\u2030\u00c3\u00a6\u00c3\u2020\u00c3\u00b4\u00c3\u00b6\u00c3\u00b2\u00c3\u00bb"
+    - "\u00c3\u00b9\u00c3\u00bf\u00c3\u2013\u00c3\u0153\u00c3\u00b8\u00c2\u00a3\u00c3\u02dc\u00c3\u2014"
+    - "\u00c6\u2019\u00c3\u00a1\u00c3\u00ad\u00c3\u00b3\u00c3\u00ba\u00c3\u00b1\u00c3\u2018\u00c2\u00aa"
+    - "\u00c2\u00ba\u00c2\u00bf\u00c2\u00ae\u00c2\u00ac\u00c2\u00bd\u00c2\u00bc\u00c2\u00a1\u00c2\u00ab"
+    - "\u00c2\u00bb"
+    - 30
+- check:
+    file: font.txt
+  name: "b1.1+"
+  changes:
+  - set_chars: "font.txt"
+- check:
+    file: font/alternate.png
+  name: "b1.9-pre3+"
+  changes:
+  - add_textures:
+      alt: font/alternate.png
+- check:
+    file: font/glyph_sizes.bin
+  name: "11w49a+"
+  changes:
+  - add_textures:
+      uniform: null
+  - unifont:
+      template: "font/glyph_%S.png"
+      sizes: font/glyph_sizes.bin"
+      uneven_spacing: true
+- check:
+    file: assets/minecraft/textures/font/ascii.png
+  name: "13w24a+"
+  changes:
+  - asset_mount: assets
+  - add_textures:
+      default: assets/minecraft/textures/font/ascii.png
+      alt: assets/minecraft/textures/font/ascii_sga.png
+  - unifont:
+      template: "assets/minecraft/textures/font/unicode_page_%s.png"
+      sizes: "assets/minecraft/font/glyph_sizes.bin"
+      uneven_spacing: true
+- check:
+    file: assets/minecraft/textures/font/ascii.png
+    no_file: font.txt
+  name: "13w42b+"
+  changes:
+  - set_chars:
+    - "ÀÁÂÈÊËÍÓÔÕÚßãõğİıŒœŞşŴŵžȇ"
+    - 7
+    - " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    - 1
+    - "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αβΓπΣσμτΦΘΩδ∞∅∈∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■"
+    - 1
+- check:
+    file: assets/minecraft/font/default.json
+  name: "1.13-pre7+"
+  changes:
+  - providers:
+      uniform: skip_bitmaps
+      uneven_unifont: true
+- check:
+    pack_version: 5
+    world_version: 2529
+  name: "20w17a+"
+  changes:
+  - providers:
+      uniform: switch_identifier
+      uneven_unifont: true
+- check:
+    pack_version: 8
+    world_version: 2966
+  name: "22w03a+"
+  changes:
+  - hardcoded_spaces:
+      " ": 4
+      "\u200c": 0
+- check:
+    pack_version: 9
+  name: "22w11a+"
+  changes:
+  - hardcoded_spaces: null
+- check:
+    pack_version: 26
+  name: "24w06a+"
+  changes:
+  - providers:
+      uniform: filter
+      uneven_unifont: true
+- check:
+    pack_version: 88
+    world_version: 4896
+  name: "26.2-pre-3+"
+  changes:
+  - providers:
+      uniform: filter
+      uneven_unifont: false
+- check:
+    pack_version: 89
+  name: "26.2-pre-3+"
+  changes:
+  - providers:
+      uniform: filter
+      uneven_unifont: true
