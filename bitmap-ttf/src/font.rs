@@ -90,26 +90,20 @@ pub struct FontMeta {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Making font")]
 pub enum MakeFontError {
-    #[error(transparent)]
     Glyph(#[from] write_fonts::error::Error),
-    #[error(transparent)]
     Builder(#[from] write_fonts::error::BuilderError),
-    #[error(transparent)]
     Coords(#[from] CoordsError),
-    #[error("Missing timestamp")]
     Timestamp,
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Converting coordinates")]
 pub enum CoordsError {
-    #[error(transparent)]
     IntCast(#[from] std::num::TryFromIntError),
-    #[error("Converting number")]
     SizeCast,
-    #[error("Converting number")]
     FloatCast,
-    #[error("Adding number")]
     IntAdd,
 }
 

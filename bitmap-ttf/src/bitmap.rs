@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
 };
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Bitmap {
     bits: bitvec::vec::BitVec<u8>,
     width: usize,
@@ -26,7 +26,7 @@ impl Display for Bitmap {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Rectangle {
     pub left: usize,
     pub top: usize,

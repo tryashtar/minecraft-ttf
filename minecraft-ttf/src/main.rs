@@ -334,22 +334,16 @@ fn report(mut err: &dyn std::error::Error) -> String {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Running command")]
 enum CommandError {
-    #[error(transparent)]
     Cache(#[from] cache::CacheError),
-    #[error(transparent)]
     Version(#[from] versions::VersionError),
-    #[error(transparent)]
     Storage(#[from] storage::StorageError),
-    #[error(transparent)]
     Providers(#[from] providers::ProvidersError),
     #[error("No version with that name found")]
     UnknownVersion,
-    #[error(transparent)]
     Font(#[from] MakeFontError),
-    #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
     Yaml(#[from] serde_saphyr::Error),
 }
 

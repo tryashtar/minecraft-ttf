@@ -144,10 +144,9 @@ struct HardcodedFont {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Determining version")]
 pub enum VersionError {
-    #[error(transparent)]
     Zip(#[from] zip::result::ZipError),
-    #[error(transparent)]
     Serde(#[from] serde_json::Error),
     #[error("Unknown version")]
     UnknownVersion,

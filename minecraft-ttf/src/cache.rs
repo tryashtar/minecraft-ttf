@@ -68,14 +68,11 @@ pub struct AssetSource {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Accessing cache")]
 pub enum CacheError {
-    #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
     Serde(#[from] serde_json::Error),
-    #[error(transparent)]
     Request(#[from] reqwest::Error),
-    #[error(transparent)]
     Zip(#[from] zip::result::ZipError),
 }
 

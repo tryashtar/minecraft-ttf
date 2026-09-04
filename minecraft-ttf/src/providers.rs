@@ -14,21 +14,21 @@ use tracing::{Level, debug, span};
 
 use crate::{cache, storage};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CharBitmap {
     pub bitmap: Bitmap,
     pub advance: f32,
     pub bold_offset: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct BitmapProvider {
     pub height: i32,
     pub ascent: i32,
     pub chars: indexmap::IndexMap<char, CharBitmap>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CharImage {
     pub content_box: Rectangle,
     pub bitmap: Bitmap,
@@ -36,7 +36,7 @@ pub struct CharImage {
     pub bold_offset: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ImageProvider {
     pub image: image::DynamicImage,
     pub has_color: bool,
@@ -45,12 +45,12 @@ pub struct ImageProvider {
     pub chars: indexmap::IndexMap<char, CharImage>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct SpaceProvider {
     pub chars: BTreeMap<char, f32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Provider {
     Bitmap(BitmapProvider),
     Image(ImageProvider),
@@ -230,14 +230,12 @@ pub fn split_grid<'a>(
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Resolving providers")]
 pub enum ProvidersError {
-    #[error(transparent)]
     Storage(#[from] storage::StorageError),
-    #[error(transparent)]
     Jagged(#[from] JaggedArrayError),
-    #[error("Recursive reference")]
+    #[error("Recursive provider reference")]
     RecursiveReference,
-    #[error(transparent)]
     Unihex(#[from] UnihexError),
 }
 
@@ -720,14 +718,13 @@ fn unihex_lines(
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Parsing unihex")]
 pub enum UnihexError {
-    #[error("Missing colon")]
+    #[error("Missing colon in unihex entry")]
     MissingColon,
-    #[error(transparent)]
     Parse(#[from] std::num::ParseIntError),
-    #[error("Invalid character")]
+    #[error("Invalid character in unihex entry")]
     InvalidChar,
-    #[error(transparent)]
     Hex(#[from] hex::FromHexError),
     #[error("Invalid dimensions for unihex entry: {0}")]
     InvalidDimensions(usize),

@@ -13,28 +13,20 @@ pub trait Storage {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error("Accessing storage")]
 pub enum StorageError {
     #[error("file not found")]
     FileNotFound,
-    #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
     Walk(#[from] walkdir::Error),
-    #[error(transparent)]
     StripPrefix(#[from] std::path::StripPrefixError),
     #[error("couldn't convert path to string")]
     PathConversion,
-    #[error(transparent)]
     Zip(#[from] zip::result::ZipError),
-    #[error(transparent)]
     Time(#[from] jiff::Error),
-    #[error(transparent)]
     Cache(#[from] cache::CacheError),
-    #[error(transparent)]
     Parse(#[from] std::string::FromUtf8Error),
-    #[error(transparent)]
     Image(#[from] image::ImageError),
-    #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
 
