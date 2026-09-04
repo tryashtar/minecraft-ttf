@@ -281,10 +281,13 @@ fn bitmap_glyph(
                 (val * mask_height_f) / height_f
             };
             if pixel_offset.fract() == 0.0 {
-                let int_offset = pixel_offset.to_usize().ok_or(CoordsError::FloatCast)?;
-                let mut bold_bitmap = Bitmap::new(base_layer.width() + int_offset, mask_height);
-                bold_bitmap.draw(base_layer, 0, 0);
-                bold_bitmap.draw(base_layer, int_offset, 0);
+                let int_offset = pixel_offset.to_isize().ok_or(CoordsError::FloatCast)?;
+                let mut bold_bitmap = Bitmap::new(
+                    (base_layer.width() as isize + int_offset) as usize,
+                    mask_height,
+                );
+                base_layer.draw_onto(&mut bold_bitmap, 0, 0);
+                base_layer.draw_onto(&mut bold_bitmap, int_offset, 0);
                 (
                     full_glyph(&bold_bitmap, &mut pen)?,
                     char_width + (val * pixel_scale),

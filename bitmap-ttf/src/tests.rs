@@ -18,3 +18,12 @@ fn efficient_square() {
     let path = &paths[0];
     assert_eq!(path.len(), 25);
 }
+
+#[test]
+fn draw() {
+    let mut bitmap = Bitmap::new(8, 8);
+    bitmap.set(6, 6, true);
+    let mut smaller = Bitmap::new(1, 8);
+    bitmap.draw_onto(&mut smaller, -6, 0);
+    assert!(smaller.get(0, 6));
+}

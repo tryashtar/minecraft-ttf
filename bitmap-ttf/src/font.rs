@@ -169,11 +169,8 @@ struct GlyphBuilder {
 }
 
 impl GlyphBuilder {
-    fn next(&mut self, advance: u16) -> u16 {
-        self.hmtx.h_metrics.push(LongMetric {
-            advance,
-            side_bearing: 0,
-        });
+    fn next(&mut self, metric: LongMetric) -> u16 {
+        self.hmtx.h_metrics.push(metric);
         let index = self.next_index;
         self.next_index += 1;
         index
@@ -181,7 +178,10 @@ impl GlyphBuilder {
 
     fn add_empty_glyph(&mut self, advance: u16) -> Result<u16, write_fonts::error::Error> {
         self.builder.add_glyph(&Glyph::Empty)?;
-        Ok(self.next(advance))
+        Ok(self.next(LongMetric {
+            advance,
+            side_bearing: 0,
+        }))
     }
 
     fn add_simple_glyph(
@@ -198,7 +198,10 @@ impl GlyphBuilder {
                 .max_points
                 .max(contour.len().to_u16().ok_or(CoordsError::SizeCast)?);
         }
-        Ok(self.next(advance))
+        Ok(self.next(LongMetric {
+            advance,
+            side_bearing: glyph.bbox.x_min,
+        }))
     }
 
     fn build_maxp(&self) -> Maxp {

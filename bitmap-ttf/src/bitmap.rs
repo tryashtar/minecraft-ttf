@@ -12,16 +12,23 @@ pub struct Bitmap {
 
 impl Display for Bitmap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "┌")?;
+        write!(f, "{}", "─".repeat(self.width))?;
+        writeln!(f, "┐")?;
         for y in 0..self.height {
+            write!(f, "│")?;
             for x in 0..self.width {
                 if self.get(x, y) {
                     write!(f, "█")?;
                 } else {
-                    write!(f, " ")?;
+                    write!(f, "░")?;
                 }
             }
-            writeln!(f)?;
+            writeln!(f, "│")?;
         }
+        write!(f, "└")?;
+        write!(f, "{}", "─".repeat(self.width))?;
+        writeln!(f, "┘")?;
         Ok(())
     }
 }
@@ -116,15 +123,28 @@ impl Bitmap {
             height,
         } = bounds;
         let mut result = Bitmap::new(*width, *height);
-        result.draw(self, *left, *top);
+        self.draw_onto(&mut result, -(*left as isize), -(*top as isize));
         result
     }
 
-    pub fn draw(&mut self, other: &Bitmap, left: usize, top: usize) {
-        for y in 0..min(other.height(), self.height.saturating_sub(top)) {
-            for x in 0..min(other.width(), self.width.saturating_sub(left)) {
-                if other.get(x, y) {
-                    self.set(x + left, y + top, true);
+    pub fn draw_onto(&self, destination: &mut Bitmap, left: isize, top: isize) {
+        let src_left = (-left).max(0) as usize;
+        let src_top = (-top).max(0) as usize;
+        let dst_left = left.max(0) as usize;
+        let dst_top = top.max(0) as usize;
+        if src_left >= self.width
+            || src_top >= self.height
+            || dst_left >= destination.width
+            || dst_top >= destination.height
+        {
+            return;
+        }
+        let width = (self.width - src_left).min(destination.width - dst_left);
+        let height = (self.height - src_top).min(destination.height - dst_top);
+        for y in 0..height {
+            for x in 0..width {
+                if self.get(src_left + x, src_top + y) {
+                    destination.set(dst_left + x, dst_top + y, true);
                 }
             }
         }

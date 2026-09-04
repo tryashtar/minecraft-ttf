@@ -646,16 +646,20 @@ fn convert_unihex_provider(
             continue;
         }
         let bitmap = unihex_bitmap(art)?;
-        debug!("{} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
         let (left, right) = unifont_char_size(
             char,
             &bitmap,
             unihex.size_overrides.as_ref().unwrap_or(&vec![]).iter(),
         );
+        let width = (right as usize)
+            .checked_sub(left as usize)
+            .ok_or(ProvidersError::Unihex(UnihexError::InvalidSize(
+                left, right,
+            )))?;
         let cropped = bitmap.resized(&Rectangle {
             left: left as usize,
             top: 0,
-            width: right as usize - left as usize,
+            width,
             height: bitmap.height(),
         });
         let advance = if uneven {
@@ -663,10 +667,19 @@ fn convert_unihex_provider(
         } else {
             even_uniform_advance(&cropped)
         };
+        debug!(
+            "{} ({:04X}):\n{}\nleft: {}, right: {}, advance: {}",
+            char,
+            Into::<u32>::into(char),
+            bitmap,
+            left,
+            right,
+            advance
+        );
         chars.insert(
             char,
             CharBitmap {
-                bitmap,
+                bitmap: cropped,
                 advance,
                 bold_offset: 0.5,
             },
@@ -729,6 +742,8 @@ pub enum UnihexError {
     Hex(#[from] hex::FromHexError),
     #[error("Invalid dimensions for unihex entry: {0}")]
     InvalidDimensions(usize),
+    #[error("Invalid size for unihex entry: {0}, {1}")]
+    InvalidSize(u32, u32),
 }
 
 fn unihex_bitmap(art: &str) -> Result<Bitmap, UnihexError> {

@@ -395,6 +395,12 @@ pub fn get_providers(
 ) -> Result<Option<providers::Providers>, providers::ProvidersError> {
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
+    if let Some(spaces) = &version.hardcoded_spaces {
+        let provider = providers::SpaceProvider {
+            chars: spaces.clone(),
+        };
+        providers.push(providers::Provider::Space(provider));
+    }
     match &version.providers {
         ProviderSupport::Supported(behavior) => {
             let Some(real) = providers::load_providers(
@@ -447,12 +453,6 @@ pub fn get_providers(
                 providers.extend(many.into_iter().map(providers::Provider::Image));
             }
         }
-    }
-    if let Some(spaces) = &version.hardcoded_spaces {
-        let provider = providers::SpaceProvider {
-            chars: spaces.clone(),
-        };
-        providers.push(providers::Provider::Space(provider));
     }
     Ok(Some(providers::Providers { providers, times }))
 }
