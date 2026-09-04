@@ -641,7 +641,7 @@ fn convert_unihex_provider(
         let code_str = &line[..colon_index];
         let art = &line[colon_index + 1..];
         let code = u32::from_str_radix(code_str, 16).map_err(UnihexError::Parse)?;
-        let char = char::from_u32(code).ok_or(UnihexError::InvalidChar)?;
+        let char = char::from_u32(code).ok_or(UnihexError::InvalidChar(code))?;
         if !options.include_char(char) || !options.include_unifont_char(char) {
             continue;
         }
@@ -724,8 +724,8 @@ pub enum UnihexError {
     #[error("Missing colon in unihex entry")]
     MissingColon,
     Parse(#[from] std::num::ParseIntError),
-    #[error("Invalid character in unihex entry")]
-    InvalidChar,
+    #[error("Invalid character in unihex entry: {0}")]
+    InvalidChar(u32),
     Hex(#[from] hex::FromHexError),
     #[error("Invalid dimensions for unihex entry: {0}")]
     InvalidDimensions(usize),

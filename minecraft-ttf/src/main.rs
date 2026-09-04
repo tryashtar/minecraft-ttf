@@ -644,6 +644,8 @@ impl ProviderGlyphSummary {
                                 bitmap: glyph.bitmap,
                                 height: bitmap.height,
                                 ascent: bitmap.ascent,
+                                advance: glyph.advance,
+                                bold_offset: glyph.bold_offset,
                                 has_color: false,
                             });
                         }
@@ -656,6 +658,8 @@ impl ProviderGlyphSummary {
                                 bitmap: glyph.bitmap,
                                 height: image.height,
                                 ascent: image.ascent,
+                                advance: glyph.advance,
+                                bold_offset: glyph.bold_offset,
                                 has_color: image.has_color,
                             });
                         }
@@ -680,6 +684,8 @@ enum GlyphSummaryEntry {
         bitmap: Bitmap,
         height: i32,
         ascent: i32,
+        advance: f32,
+        bold_offset: f32,
         has_color: bool,
     },
     Space(f32),

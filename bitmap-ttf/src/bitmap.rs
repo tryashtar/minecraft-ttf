@@ -5,7 +5,7 @@ use std::{
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Bitmap {
-    bits: bitvec::vec::BitVec<u8>,
+    bits: bitvec::vec::BitVec<u8, bitvec::order::Msb0>,
     width: usize,
     height: usize,
 }
@@ -37,13 +37,17 @@ pub struct Rectangle {
 impl Bitmap {
     pub fn new(width: usize, height: usize) -> Self {
         Self {
-            bits: bitvec::bitvec![u8, bitvec::order::Lsb0; 0; width * height],
+            bits: bitvec::bitvec![u8, bitvec::order::Msb0; 0; width * height],
             width,
             height,
         }
     }
 
-    pub fn from_array(width: usize, height: usize, bits: bitvec::vec::BitVec<u8>) -> Option<Self> {
+    pub fn from_array(
+        width: usize,
+        height: usize,
+        bits: bitvec::vec::BitVec<u8, bitvec::order::Msb0>,
+    ) -> Option<Self> {
         if width * height == bits.len() {
             Some(Self {
                 bits,
@@ -117,8 +121,8 @@ impl Bitmap {
     }
 
     pub fn draw(&mut self, other: &Bitmap, left: usize, top: usize) {
-        for y in 0..min(other.height(), self.height - top) {
-            for x in 0..min(other.width(), self.width - left) {
+        for y in 0..min(other.height(), self.height.saturating_sub(top)) {
+            for x in 0..min(other.width(), self.width.saturating_sub(left)) {
                 if other.get(x, y) {
                     self.set(x + left, y + top, true);
                 }
