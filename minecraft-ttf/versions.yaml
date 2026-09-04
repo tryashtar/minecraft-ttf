@@ -70,7 +70,7 @@
       uniform: null
   - unifont:
       template: "font/glyph_%S.png"
-      sizes: font/glyph_sizes.bin"
+      sizes: font/glyph_sizes.bin
       uneven_spacing: true
 - check:
     file: assets/minecraft/textures/font/ascii.png

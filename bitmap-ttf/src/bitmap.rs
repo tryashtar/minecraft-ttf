@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
 };
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Bitmap {
     bits: bitvec::vec::BitVec<u8>,
     width: usize,

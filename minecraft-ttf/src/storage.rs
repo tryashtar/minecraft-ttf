@@ -15,8 +15,8 @@ pub trait Storage {
 #[derive(thiserror::Error, Debug)]
 #[error("Accessing storage")]
 pub enum StorageError {
-    #[error("file not found")]
-    FileNotFound,
+    #[error("file not found: {0}")]
+    FileNotFound(PathBuf),
     Io(#[from] std::io::Error),
     Walk(#[from] walkdir::Error),
     StripPrefix(#[from] std::path::StripPrefixError),
@@ -25,9 +25,9 @@ pub enum StorageError {
     Zip(#[from] zip::result::ZipError),
     Time(#[from] jiff::Error),
     Cache(#[from] cache::CacheError),
-    Parse(#[from] std::string::FromUtf8Error),
+    Decode(#[from] std::string::FromUtf8Error),
     Image(#[from] image::ImageError),
-    Json(#[from] serde_json::Error),
+    Json(#[from] json5::Error),
 }
 
 #[derive(Debug)]
@@ -54,7 +54,9 @@ impl Storage for FilesystemStorage {
         let path = self.root.join(entry);
         let result = std::fs::read(&path);
         match result {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::FileNotFound),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(StorageError::FileNotFound(entry.to_owned()))
+            }
             other => Ok(other?),
         }
     }
@@ -63,7 +65,9 @@ impl Storage for FilesystemStorage {
         let path = self.root.join(entry);
         let metadata = std::fs::metadata(path);
         match metadata {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::FileNotFound),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(StorageError::FileNotFound(entry.to_owned()))
+            }
             Err(e) => Err(StorageError::Io(e)),
             Ok(metadata) => {
                 let Ok(modified) = metadata.modified() else {
@@ -105,7 +109,9 @@ impl<T: std::io::Read + std::io::Seek> Storage for ZipStorage<T> {
         };
         let file = self.zip.by_name(name);
         match file {
-            Err(zip::result::ZipError::FileNotFound) => Err(StorageError::FileNotFound),
+            Err(zip::result::ZipError::FileNotFound) => {
+                Err(StorageError::FileNotFound(entry.to_owned()))
+            }
             Err(e) => Err(StorageError::Zip(e)),
             Ok(mut file) => {
                 let mut bytes = vec![];
@@ -121,7 +127,9 @@ impl<T: std::io::Read + std::io::Seek> Storage for ZipStorage<T> {
         };
         let file = self.zip.by_name(name);
         match file {
-            Err(zip::result::ZipError::FileNotFound) => Err(StorageError::FileNotFound),
+            Err(zip::result::ZipError::FileNotFound) => {
+                Err(StorageError::FileNotFound(entry.to_owned()))
+            }
             Err(e) => Err(StorageError::Zip(e)),
             Ok(file) => Ok(zip_time(&file)?),
         }
@@ -144,11 +152,12 @@ pub struct StackStorage(pub Vec<Box<dyn Storage>>);
 fn stack_first<T>(
     storage: &mut StackStorage,
     mut callback: impl FnMut(&mut dyn Storage) -> Result<T, StorageError>,
+    path: &Path,
 ) -> Result<T, StorageError> {
     for sub in storage.0.iter_mut() {
         let result = callback(Box::as_mut(sub));
         match result {
-            Err(StorageError::FileNotFound) => {
+            Err(StorageError::FileNotFound(_)) => {
                 continue;
             }
             _ => {
@@ -156,18 +165,19 @@ fn stack_first<T>(
             }
         }
     }
-    Err(StorageError::FileNotFound)
+    Err(StorageError::FileNotFound(path.to_owned()))
 }
 
 pub fn stack_all<T>(
     storage: &mut StackStorage,
     mut callback: impl FnMut(&mut dyn Storage) -> Result<T, StorageError>,
+    path: &Path,
 ) -> Result<Vec<T>, StorageError> {
     let mut results = vec![];
     for sub in storage.0.iter_mut() {
         let result = callback(Box::as_mut(sub));
         match result {
-            Err(StorageError::FileNotFound) => {
+            Err(StorageError::FileNotFound(_)) => {
                 continue;
             }
             Err(err) => {
@@ -179,7 +189,7 @@ pub fn stack_all<T>(
         }
     }
     if results.is_empty() {
-        Err(StorageError::FileNotFound)
+        Err(StorageError::FileNotFound(path.to_owned()))
     } else {
         Ok(results)
     }
@@ -196,11 +206,11 @@ impl Storage for StackStorage {
     }
 
     fn read(&mut self, entry: &Path) -> Result<Vec<u8>, StorageError> {
-        stack_first(self, |x| x.read(entry))
+        stack_first(self, |x| x.read(entry), entry)
     }
 
     fn modified_time(&mut self, entry: &Path) -> Result<Option<jiff::Timestamp>, StorageError> {
-        stack_first(self, |x| x.modified_time(entry))
+        stack_first(self, |x| x.modified_time(entry), entry)
     }
 }
 
@@ -247,7 +257,8 @@ pub fn read_json<T: serde::de::DeserializeOwned, J: Storage + ?Sized>(
 ) -> Result<ReadEntry<T>, StorageError> {
     let modified_time = store.modified_time(entry)?;
     let data = store.read(entry)?;
-    let result = serde_json::from_slice(&data)?;
+    let text = String::from_utf8(data)?;
+    let result = json5::from_str(&text)?;
     Ok(ReadEntry {
         data: result,
         modified_time,

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -147,7 +148,8 @@ struct HardcodedFont {
 #[error("Determining version")]
 pub enum VersionError {
     Zip(#[from] zip::result::ZipError),
-    Serde(#[from] serde_json::Error),
+    Serde(#[from] json5::Error),
+    Io(#[from] std::io::Error),
     #[error("Unknown version")]
     UnknownVersion,
 }
@@ -325,7 +327,11 @@ pub fn detect_version(
     jar: &mut zip::ZipArchive<impl std::io::Read + std::io::Seek>,
 ) -> Result<MinecraftVersion, VersionError> {
     let version_json: VersionJson = match jar.by_name("version.json") {
-        Ok(file) => serde_json::from_reader(file)?,
+        Ok(mut file) => {
+            let mut text = String::new();
+            file.read_to_string(&mut text)?;
+            json5::from_str(&text)?
+        }
         Err(zip::result::ZipError::FileNotFound) => VersionJson::default(),
         Err(e) => return Err(VersionError::Zip(e)),
     };

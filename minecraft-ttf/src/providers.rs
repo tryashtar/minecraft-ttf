@@ -375,7 +375,7 @@ struct RootJsonProvider {
 }
 
 #[derive(serde::Deserialize, Debug)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum JsonProvider {
     Bitmap(JsonBitmapProvider),
     Space(JsonSpaceProvider),
@@ -481,7 +481,7 @@ pub fn load_providers(
     };
     seen.insert(identifier);
     match read_stacked_providers(store, &entry) {
-        Err(storage::StorageError::FileNotFound) => Ok(None),
+        Err(storage::StorageError::FileNotFound(_)) => Ok(None),
         Err(err) => Err(ProvidersError::Storage(err)),
         Ok((providers, mut times)) => {
             let mut converted = vec![];
@@ -539,8 +539,9 @@ fn convert_provider(
             if seen.contains(&reference.id) {
                 return Err(ProvidersError::RecursiveReference);
             }
+            let err_entry = reference.id.to_entry(Some("font"), Some("json"));
             let resolved = load_providers(reference.id, store, options, behavior, seen)?
-                .ok_or(storage::StorageError::FileNotFound)?;
+                .ok_or(storage::StorageError::FileNotFound(err_entry))?;
             Ok(resolved)
         }
         JsonProvider::LegacyUnicode(unicode) => {
@@ -714,7 +715,7 @@ fn unihex_lines(
             });
         };
     }
-    Err(storage::StorageError::FileNotFound)
+    Err(storage::StorageError::FileNotFound(PathBuf::from(".hex")))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -785,7 +786,7 @@ pub fn legacy_unicode<'a>(
         .collect();
     for (chars, sheet_path) in sheets {
         let img_data = match storage::read_image(store, sheet_path) {
-            Err(storage::StorageError::FileNotFound) => {
+            Err(storage::StorageError::FileNotFound(_)) => {
                 continue;
             }
             Err(err) => {
@@ -844,9 +845,11 @@ fn read_stacked_providers(
     store: &mut storage::StackStorage,
     entry: &Path,
 ) -> Result<(Vec<JsonProvider>, ModifiedTimes), storage::StorageError> {
-    let results = storage::stack_all(store, |x| {
-        storage::read_json::<RootJsonProvider, _>(x, entry)
-    })?;
+    let results = storage::stack_all(
+        store,
+        |x| storage::read_json::<RootJsonProvider, _>(x, entry),
+        entry,
+    )?;
     let mut times = ModifiedTimes::default();
     let mapped = results
         .into_iter()

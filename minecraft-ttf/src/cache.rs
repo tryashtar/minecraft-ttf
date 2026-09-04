@@ -71,7 +71,8 @@ pub struct AssetSource {
 #[error("Accessing cache")]
 pub enum CacheError {
     Io(#[from] std::io::Error),
-    Serde(#[from] serde_json::Error),
+    Decode(#[from] std::string::FromUtf8Error),
+    Serde(#[from] json5::Error),
     Request(#[from] reqwest::Error),
     Zip(#[from] zip::result::ZipError),
 }
@@ -146,7 +147,8 @@ fn read_or_download_json<T: serde::de::DeserializeOwned>(
     url: impl reqwest::IntoUrl + Display,
 ) -> Result<T, CacheError> {
     let bytes = read_or_download_bytes(path, url)?;
-    let result = serde_json::from_slice(&bytes)?;
+    let text = String::from_utf8(bytes)?;
+    let result = json5::from_str(&text)?;
     Ok(result)
 }
 
@@ -212,7 +214,7 @@ fn get_asset<'a>(
         return Err(storage::StorageError::PathConversion);
     };
     let Some(data) = store.assets.objects.get(name) else {
-        return Err(storage::StorageError::FileNotFound);
+        return Err(storage::StorageError::FileNotFound(entry.to_owned()));
     };
     Ok(data)
 }
