@@ -9,7 +9,7 @@ use std::{
 
 use bitmap_ttf::{
     bitmap::Bitmap,
-    font::{FontPositions, MakeFontError, make_font},
+    font::{FontPositions, MakeFontError, ScriptPositions, make_font},
 };
 use clap::Parser;
 use image::GenericImageView;
@@ -436,10 +436,7 @@ fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     let positions = positions();
-    let missing_glyph = info
-        .version
-        .supports_missing_glyph()
-        .then(|| missing_glyph());
+    let missing_glyph = info.version.supports_missing_glyph().then(missing_glyph);
     for identifier in &args.identifiers {
         let id_info = identifier.info();
         let providers = versions::get_providers(
@@ -572,7 +569,20 @@ fn positions() -> FontPositions {
         y_strikeout_size: 1.0 / 12.0,
         underline_position: -1.0 / 12.0,
         underline_thickness: 1.0 / 12.0,
+        line_gap: -1.0 / 12.0,
         italic_angle: 4.0f64.atan2(1.0).to_degrees() - 90.0,
+        subscript: ScriptPositions {
+            x_size: 4.0 / 12.0,
+            y_size: 5.0 / 12.0,
+            x_offset: 0.0 / 12.0,
+            y_offset: 1.0 / 12.0,
+        },
+        superscript: ScriptPositions {
+            x_size: 4.0 / 12.0,
+            y_size: 5.0 / 12.0,
+            x_offset: 0.0 / 12.0,
+            y_offset: 2.0 / 12.0,
+        },
     }
 }
 

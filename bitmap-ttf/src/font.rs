@@ -1,8 +1,11 @@
-use std::collections::BTreeMap;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use num_traits::ToPrimitive;
 use read_fonts::{
-    tables::{cmap::PlatformId, glyf::CurvePoint, head::Flags},
+    tables::{cmap::PlatformId, glyf::CurvePoint, head::Flags, os2::OS2_UNICODE_RANGES},
     types::{UfWord, Version16Dot16},
 };
 use tracing::{Level, debug, span};
@@ -26,7 +29,7 @@ use write_fonts::{
     types::{FWord, Fixed, GlyphId16, LongDateTime, NameId},
 };
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct GlyphInfo {
     pub width: u16,
     pub height: u16,
@@ -46,10 +49,18 @@ impl GlyphInfo {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ColoredLayer {
     pub glyph: SimpleGlyph,
     pub color: ColorRecord,
+}
+
+#[derive(Debug)]
+pub struct ScriptPositions {
+    pub x_size: f64,
+    pub y_size: f64,
+    pub x_offset: f64,
+    pub y_offset: f64,
 }
 
 #[derive(Debug)]
@@ -63,6 +74,9 @@ pub struct FontPositions {
     pub underline_position: f64,
     pub underline_thickness: f64,
     pub italic_angle: f64,
+    pub line_gap: f64,
+    pub subscript: ScriptPositions,
+    pub superscript: ScriptPositions,
 }
 
 #[derive(Debug)]
@@ -109,15 +123,13 @@ pub fn make_font<'a>(
     notdef: &GlyphInfo,
 ) -> Result<FontBuilder<'a>, MakeFontError> {
     let mut builder = FontBuilder::new();
-    let (loca_format, glyph_count, largest) = add_glyphs(&mut builder, chars, notdef)?;
+    let glyph_results = add_glyphs(&mut builder, chars, notdef)?;
     add_metrics(
         &mut builder,
         meta,
         positions,
-        glyph_count,
-        largest,
         smallest_legible,
-        loca_format,
+        &glyph_results,
     )?;
     Ok(builder)
 }
@@ -219,6 +231,24 @@ impl GlyphBuilder {
 struct CmapBuilder {
     low_pairs: BTreeMap<u16, u16>,
     all_pairs: BTreeMap<char, u16>,
+    unicode_ranges: u128,
+}
+
+fn get_unicode_range_bit(codepoint: u32) -> Option<u8> {
+    OS2_UNICODE_RANGES
+        .binary_search_by(|&(a, b, _)| unicode_range_cmp(codepoint, a, b))
+        .ok()
+        .map(|i| OS2_UNICODE_RANGES[i].2)
+}
+
+fn unicode_range_cmp(codepoint: u32, first: u32, last: u32) -> Ordering {
+    if codepoint < first {
+        Ordering::Greater
+    } else if codepoint <= last {
+        Ordering::Equal
+    } else {
+        Ordering::Less
+    }
 }
 
 impl CmapBuilder {
@@ -227,6 +257,11 @@ impl CmapBuilder {
             self.low_pairs.insert(small, glyph_id);
         }
         self.all_pairs.insert(char, glyph_id);
+        if let Some(bit) = get_unicode_range_bit(char.into())
+            && bit < 128
+        {
+            self.unicode_ranges |= 1 << bit;
+        }
     }
 
     fn build(&self) -> Cmap {
@@ -480,6 +515,7 @@ struct GlyphAndColorBuilder {
     glyph_builder: GlyphBuilder,
     largest: GlyphSize,
     color_pieces: Vec<ColorPiece>,
+    accumulated_advance: i64,
 }
 
 #[derive(Debug)]
@@ -510,6 +546,7 @@ impl GlyphAndColorBuilder {
         }
         self.largest.bounds = self.largest.bounds.union(size.bounds);
         self.largest.advance = self.largest.advance.max(size.advance);
+        self.accumulated_advance += Into::<i64>::into(size.advance);
         Ok(glyph_index)
     }
 
@@ -594,11 +631,22 @@ impl GlyphAndColorBuilder {
     }
 }
 
+#[derive(Debug)]
+struct AddGlyphResults {
+    loca_format: LocaFormat,
+    glyph_count: u16,
+    largest: GlyphSize,
+    average_advance: i16,
+    unicode_ranges: u128,
+    low_chars: BTreeSet<u16>,
+    chars: BTreeSet<char>,
+}
+
 fn add_glyphs(
     builder: &mut FontBuilder,
     chars: &CharMap,
     notdef: &GlyphInfo,
-) -> Result<(LocaFormat, u16, GlyphSize), MakeFontError> {
+) -> Result<AddGlyphResults, MakeFontError> {
     let mut glyph_builder = GlyphAndColorBuilder::default();
     let mut cmap_builder = CmapBuilder::default();
     glyph_builder.import(notdef)?;
@@ -608,6 +656,9 @@ fn add_glyphs(
     }
     let colors = glyph_builder.build_color()?;
     let maxp = glyph_builder.glyph_builder.build_maxp();
+    let average_advance = (glyph_builder.accumulated_advance / Into::<i64>::into(maxp.num_glyphs))
+        .try_into()
+        .map_err(CoordsError::IntCast)?;
     let (glyf, loca, loca_format) = glyph_builder.glyph_builder.builder.build();
     let cmap = cmap_builder.build();
     builder
@@ -619,7 +670,15 @@ fn add_glyphs(
     if let Some((cpal, cmap)) = colors {
         builder.add_table(&cpal)?.add_table(&cmap)?;
     }
-    Ok((loca_format, maxp.num_glyphs, glyph_builder.largest))
+    Ok(AddGlyphResults {
+        loca_format,
+        glyph_count: maxp.num_glyphs,
+        largest: glyph_builder.largest,
+        average_advance,
+        unicode_ranges: cmap_builder.unicode_ranges,
+        low_chars: cmap_builder.low_pairs.keys().copied().collect(),
+        chars: cmap_builder.all_pairs.keys().copied().collect(),
+    })
 }
 
 fn add_glyph(
@@ -653,14 +712,21 @@ fn add_glyph(
     Ok((glyph_index, size.largest))
 }
 
+fn split_unicode_range(range: u128) -> [u32; 4] {
+    [
+        range as u32,
+        (range >> 32) as u32,
+        (range >> 64) as u32,
+        (range >> 96) as u32,
+    ]
+}
+
 fn add_metrics(
     builder: &mut FontBuilder,
     meta: FontMeta,
     positions: &FontPositions,
-    glyph_count: u16,
-    largest: GlyphSize,
     smallest_legible: u16,
-    loca_format: LocaFormat,
+    glyph_results: &AddGlyphResults,
 ) -> Result<(), MakeFontError> {
     let names = meta.names.into_table();
     let em: f64 = meta.em.into();
@@ -677,8 +743,17 @@ fn add_metrics(
     let hhea = Hhea {
         ascender: FWord::new(signed_ascent),
         descender: FWord::new(-signed_descent),
-        advance_width_max: UfWord::new(largest.advance),
-        number_of_h_metrics: glyph_count,
+        x_max_extent: FWord::new(glyph_results.largest.bounds.x_max),
+        advance_width_max: UfWord::new(glyph_results.largest.advance),
+        number_of_h_metrics: glyph_results.glyph_count,
+        min_left_side_bearing: FWord::new(glyph_results.largest.bounds.x_min),
+        min_right_side_bearing: FWord::new(0),
+        line_gap: FWord::new(
+            (em * positions.line_gap)
+                .round()
+                .to_i16()
+                .ok_or(CoordsError::FloatCast)?,
+        ),
         ..Default::default()
     };
     let (fs_selection, mac_style) = match (meta.bold, meta.italic) {
@@ -694,6 +769,7 @@ fn add_metrics(
         (false, false) => (SelectionFlags::REGULAR, MacStyle::empty()),
     };
     let weight = if meta.bold { 700 } else { 400 };
+    let [uni1, uni2, uni3, uni4] = split_unicode_range(glyph_results.unicode_ranges);
     let os2 = Os2 {
         s_typo_ascender: signed_ascent,
         s_typo_descender: -signed_descent,
@@ -719,18 +795,61 @@ fn add_metrics(
             .round()
             .to_i16()
             .ok_or(CoordsError::FloatCast)?,
-        s_typo_line_gap: 0,
-        fs_selection,
+        s_typo_line_gap: (em * positions.line_gap)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        fs_selection: fs_selection | SelectionFlags::USE_TYPO_METRICS,
         us_weight_class: weight,
+        ul_unicode_range_1: uni1,
+        ul_unicode_range_2: uni2,
+        ul_unicode_range_3: uni3,
+        ul_unicode_range_4: uni4,
         ul_code_page_range_1: Some(0),
         ul_code_page_range_2: Some(0),
         us_default_char: Some(0),
-        us_break_char: Some(0),
+        us_break_char: Some(0x20),
         us_max_context: Some(0),
+        us_first_char_index: glyph_results.low_chars.first().copied().unwrap_or(0),
+        us_last_char_index: glyph_results.low_chars.last().copied().unwrap_or(0),
+        x_avg_char_width: glyph_results.average_advance,
+        y_subscript_x_size: (em * positions.subscript.x_size)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_subscript_y_size: (em * positions.subscript.y_size)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_subscript_x_offset: (em * positions.subscript.x_offset)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_subscript_y_offset: (em * positions.subscript.y_offset)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_superscript_x_size: (em * positions.superscript.x_size)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_superscript_y_size: (em * positions.superscript.y_size)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_superscript_x_offset: (em * positions.superscript.x_offset)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
+        y_superscript_y_offset: (em * positions.superscript.y_offset)
+            .round()
+            .to_i16()
+            .ok_or(CoordsError::FloatCast)?,
         ..Default::default()
     };
     let post = Post {
         version: Version16Dot16::new(3, 0),
+        num_glyphs: Some(glyph_results.glyph_count),
         underline_position: FWord::new(
             (em * positions.underline_position)
                 .round()
@@ -753,16 +872,16 @@ fn add_metrics(
     let epoch = jiff::Timestamp::constant(-2_082_844_800, 0);
     let head = Head {
         units_per_em: meta.em,
-        x_min: largest.bounds.x_min,
-        x_max: largest.bounds.x_max,
-        y_min: largest.bounds.y_min,
-        y_max: largest.bounds.y_max,
+        x_min: glyph_results.largest.bounds.x_min,
+        x_max: glyph_results.largest.bounds.x_max,
+        y_min: glyph_results.largest.bounds.y_min,
+        y_max: glyph_results.largest.bounds.y_max,
         created: LongDateTime::new(meta.created.as_second() - epoch.as_second()),
         modified: LongDateTime::new(meta.modified.as_second() - epoch.as_second()),
         mac_style,
         // enum cast
         // https://doc.rust-lang.org/reference/expressions/operator-expr.html#r-expr.as.enum.discriminant
-        index_to_loc_format: loca_format as i16,
+        index_to_loc_format: glyph_results.loca_format as i16,
         flags: Flags::BASELINE_AT_Y_0 | Flags::LSB_AT_X_0,
         lowest_rec_ppem: smallest_legible,
         ..Default::default()
