@@ -89,12 +89,14 @@ pub fn create_font<'a>(
         Some(glyph) => Some(bitmap_glyph(
             glyph,
             &[],
-            glyph.width().to_f32().ok_or(CoordsError::SizeCast)? + 1.0,
-            8,
-            7,
-            pixel_scale,
-            bold.then_some(1.0),
-            italic.then_some((-6.0 / 8.0, 4.0)),
+            BitmapGlyphSizes {
+                advance: glyph.width().to_f32().ok_or(CoordsError::SizeCast)? + 1.0,
+                height: 8,
+                ascent: 7,
+                pixel_scale,
+                bold_offset: bold.then_some(1.0),
+                italic: italic.then_some((-6.0 / 8.0, 4.0)),
+            },
         )?),
     }
     .unwrap_or(GlyphInfo::empty(0));
@@ -123,15 +125,17 @@ pub fn create_font<'a>(
                     let glyph = bitmap_glyph(
                         &data.bitmap,
                         &[],
-                        data.advance,
-                        provider.height,
-                        provider.ascent,
-                        pixel_scale,
-                        bold.then_some(data.bold_offset),
-                        italic.then_some((
-                            -6.0 / provider.height.to_f32().ok_or(CoordsError::FloatCast)?,
-                            4.0,
-                        )),
+                        BitmapGlyphSizes {
+                            advance: data.advance,
+                            height: provider.height,
+                            ascent: provider.ascent,
+                            pixel_scale,
+                            bold_offset: bold.then_some(data.bold_offset),
+                            italic: italic.then_some((
+                                -6.0 / provider.height.to_f32().ok_or(CoordsError::FloatCast)?,
+                                4.0,
+                            )),
+                        },
                     )?;
                     chars.insert(*char, glyph);
                     add_scale(&mut scales, *char, data.bitmap.height(), provider.height)?;
@@ -183,15 +187,17 @@ pub fn create_font<'a>(
                     let glyph = bitmap_glyph(
                         &data.bitmap,
                         colored_layers.as_slice(),
-                        data.advance,
-                        provider.height,
-                        provider.ascent,
-                        pixel_scale,
-                        bold.then_some(data.bold_offset),
-                        italic.then_some((
-                            -6.0 / provider.height.to_f32().ok_or(CoordsError::FloatCast)?,
-                            4.0,
-                        )),
+                        BitmapGlyphSizes {
+                            advance: data.advance,
+                            height: provider.height,
+                            ascent: provider.ascent,
+                            pixel_scale,
+                            bold_offset: bold.then_some(data.bold_offset),
+                            italic: italic.then_some((
+                                -6.0 / provider.height.to_f32().ok_or(CoordsError::FloatCast)?,
+                                4.0,
+                            )),
+                        },
                     )?;
                     chars.insert(*char, glyph);
                     add_scale(&mut scales, *char, data.bitmap.height(), provider.height)?;
@@ -227,22 +233,26 @@ fn add_scale(
     Ok(())
 }
 
-fn bitmap_glyph(
-    base_layer: &Bitmap,
-    colored_layers: &[(Bitmap, ColorRecord)],
+struct BitmapGlyphSizes {
     advance: f32,
     height: i32,
     ascent: i32,
     pixel_scale: f32,
     bold_offset: Option<f32>,
     italic: Option<(f32, f32)>,
+}
+
+fn bitmap_glyph(
+    base_layer: &Bitmap,
+    colored_layers: &[(Bitmap, ColorRecord)],
+    sizes: BitmapGlyphSizes,
 ) -> Result<GlyphInfo, CoordsError> {
     let mask_height = base_layer.height();
     let mask_height_f = mask_height.to_f32().ok_or(CoordsError::FloatCast)?;
-    let height_f = height.to_f32().ok_or(CoordsError::FloatCast)?;
-    let ascent_f = ascent.to_f32().ok_or(CoordsError::FloatCast)?;
-    let offset_x = italic.map(|x| x.0).unwrap_or(0.0);
-    let offset_y = if height == 0 {
+    let height_f = sizes.height.to_f32().ok_or(CoordsError::FloatCast)?;
+    let ascent_f = sizes.ascent.to_f32().ok_or(CoordsError::FloatCast)?;
+    let offset_x = sizes.italic.map(|x| x.0).unwrap_or(0.0);
+    let offset_y = if sizes.height == 0 {
         0.0
     } else {
         ((height_f - ascent_f) * mask_height_f) / height_f
@@ -250,60 +260,16 @@ fn bitmap_glyph(
     let scale = if mask_height == 0 {
         0.0
     } else {
-        (height_f * pixel_scale) / mask_height_f
+        (height_f * sizes.pixel_scale) / mask_height_f
     };
     let mut pen = TracePen::new(
         mask_height,
         scale,
         (offset_x, -offset_y),
-        italic.map(|x| x.1),
+        sizes.italic.map(|x| x.1),
     );
-    let char_width = advance * pixel_scale;
-    let char_height = height_f * pixel_scale;
-    let (base_glyph, advance, offsets, color_offsets) = match bold_offset {
-        None => (
-            full_glyph(base_layer, &mut pen)?,
-            char_width,
-            vec![(0, 0)],
-            vec![(0, 0)],
-        ),
-        Some(val) => {
-            let color_offsets = vec![
-                (0, 0),
-                (
-                    (val * pixel_scale).to_i16().ok_or(CoordsError::FloatCast)?,
-                    0,
-                ),
-            ];
-            let pixel_offset = if height == 0 {
-                0.0
-            } else {
-                (val * mask_height_f) / height_f
-            };
-            if pixel_offset.fract() == 0.0 {
-                let int_offset = pixel_offset.to_isize().ok_or(CoordsError::FloatCast)?;
-                let mut bold_bitmap = Bitmap::new(
-                    (base_layer.width() as isize + int_offset) as usize,
-                    mask_height,
-                );
-                base_layer.draw_onto(&mut bold_bitmap, 0, 0);
-                base_layer.draw_onto(&mut bold_bitmap, int_offset, 0);
-                (
-                    full_glyph(&bold_bitmap, &mut pen)?,
-                    char_width + (val * pixel_scale),
-                    vec![(0, 0)],
-                    color_offsets,
-                )
-            } else {
-                (
-                    full_glyph(base_layer, &mut pen)?,
-                    char_width,
-                    color_offsets.clone(),
-                    color_offsets,
-                )
-            }
-        }
-    };
+    let char_width = sizes.advance * sizes.pixel_scale;
+    let char_height = height_f * sizes.pixel_scale;
     let mut colored_paths = vec![];
     let mut colored_base = None;
     if colored_layers.len() == 1 {
@@ -317,15 +283,64 @@ fn bitmap_glyph(
             });
         }
     }
-    Ok(GlyphInfo {
-        width: advance.to_u16().ok_or(CoordsError::FloatCast)?,
-        height: char_height.to_u16().ok_or(CoordsError::FloatCast)?,
-        base_layer: Some(base_glyph),
-        base_offsets: offsets,
-        base_color: colored_base,
-        colored_layers: colored_paths,
-        colored_offsets: color_offsets,
-    })
+    let glyph_info = match sizes.bold_offset {
+        None => GlyphInfo {
+            width: char_width.to_u16().ok_or(CoordsError::FloatCast)?,
+            height: char_height.to_u16().ok_or(CoordsError::FloatCast)?,
+            base_layer: Some(full_glyph(base_layer, &mut pen)?),
+            base_offsets: vec![(0, 0)],
+            base_color: colored_base,
+            colored_layers: colored_paths,
+            colored_offsets: vec![(0, 0)],
+        },
+        Some(val) => {
+            let color_offsets = vec![
+                (0, 0),
+                (
+                    (val * sizes.pixel_scale)
+                        .to_i16()
+                        .ok_or(CoordsError::FloatCast)?,
+                    0,
+                ),
+            ];
+            let pixel_offset = if sizes.height == 0 {
+                0.0
+            } else {
+                (val * mask_height_f) / height_f
+            };
+            if pixel_offset.fract() == 0.0 {
+                let int_offset = pixel_offset.to_isize().ok_or(CoordsError::FloatCast)?;
+                let mut bold_bitmap = Bitmap::new(
+                    (base_layer.width() as isize + int_offset) as usize,
+                    mask_height,
+                );
+                base_layer.draw_onto(&mut bold_bitmap, 0, 0);
+                base_layer.draw_onto(&mut bold_bitmap, int_offset, 0);
+                GlyphInfo {
+                    width: (char_width + (val * sizes.pixel_scale))
+                        .to_u16()
+                        .ok_or(CoordsError::FloatCast)?,
+                    height: char_height.to_u16().ok_or(CoordsError::FloatCast)?,
+                    base_layer: Some(full_glyph(&bold_bitmap, &mut pen)?),
+                    base_offsets: vec![(0, 0)],
+                    base_color: colored_base,
+                    colored_layers: colored_paths,
+                    colored_offsets: color_offsets,
+                }
+            } else {
+                GlyphInfo {
+                    width: char_width.to_u16().ok_or(CoordsError::FloatCast)?,
+                    height: char_height.to_u16().ok_or(CoordsError::FloatCast)?,
+                    base_layer: Some(full_glyph(base_layer, &mut pen)?),
+                    base_offsets: color_offsets.clone(),
+                    base_color: colored_base,
+                    colored_layers: colored_paths,
+                    colored_offsets: color_offsets,
+                }
+            }
+        }
+    };
+    Ok(glyph_info)
 }
 
 #[derive(Debug)]

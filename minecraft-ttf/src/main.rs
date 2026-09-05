@@ -86,9 +86,9 @@ struct VanillaHistoryArgs {
     /// Last version to scan
     #[arg(long)]
     to: Option<String>,
-    /// Folder to save the changed fonts in
+    /// Print detailed information about every changed character
     #[arg(long)]
-    output: Option<PathBuf>,
+    verbose: bool,
     #[command(flatten)]
     font_args: FontArgs,
     #[command(flatten)]
@@ -629,7 +629,7 @@ fn positions() -> FontPositions {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 struct ProviderGlyphSummary(BTreeMap<char, GlyphSummaryEntry>);
 
 impl ProviderGlyphSummary {
@@ -719,10 +719,12 @@ impl SummaryChangeReport {
     }
 }
 
+type HistoryTrack = HashMap<VanillaFontId, Vec<(String, ProviderGlyphSummary)>>;
+
 fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
     let checker = version_checker()?;
     let manifest = cache::get_manifest(&args.generic_args.cache)?;
-    let mut history: HashMap<VanillaFontId, Vec<ProviderGlyphSummary>> = HashMap::new();
+    let mut history = HistoryTrack::new();
     for version in manifest.versions.iter().rev() {
         match load_jar_version(version, &checker, &args.generic_args.cache) {
             Err(CommandError::Version(versions::VersionError::UnknownVersion)) => {
@@ -744,47 +746,137 @@ fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
                         &args.font_args,
                     )?;
                     if let Some(providers) = providers {
-                        let summary = ProviderGlyphSummary::new(providers.providers);
-                        let history_entry = history.entry(*identifier).or_default();
-                        let last_version = history_entry.last().cloned().unwrap_or_default();
-                        let changes = SummaryChangeReport::new(last_version, summary.clone());
-                        if changes.any() {
-                            history_entry.push(summary);
-                            println!(
-                                "{} ({}): {} changed",
-                                version.id, info.version.name, identifier
-                            );
-                            if !changes.added.is_empty() {
-                                println!(
-                                    "\tadded {}",
-                                    report_characters(
-                                        &changes.added.keys().copied().collect::<Vec<_>>()
-                                    ),
-                                );
-                            }
-                            if !changes.removed.is_empty() {
-                                println!(
-                                    "\tremoved {}",
-                                    report_characters(
-                                        &changes.removed.keys().copied().collect::<Vec<_>>()
-                                    ),
-                                );
-                            }
-                            if !changes.changed.is_empty() {
-                                println!(
-                                    "\tchanged {}",
-                                    report_characters(
-                                        &changes.changed.keys().copied().collect::<Vec<_>>()
-                                    ),
-                                );
-                            }
-                        }
+                        vanilla_history_entry(
+                            providers.providers,
+                            &mut history,
+                            identifier,
+                            &version.id,
+                            &info.version.name,
+                            args.verbose,
+                        );
                     }
                 }
             }
         }
     }
     Ok(())
+}
+
+fn vanilla_history_entry(
+    providers: Vec<providers::Provider>,
+    history: &mut HistoryTrack,
+    identifier: &VanillaFontId,
+    version: &str,
+    version_name: &str,
+    verbose: bool,
+) {
+    let summary = ProviderGlyphSummary::new(providers);
+    let history_entry = history.entry(*identifier).or_default();
+    let last_version = history_entry
+        .last()
+        .cloned()
+        .map(|x| x.1)
+        .unwrap_or_default();
+    if summary == last_version {
+        return;
+    }
+    let existing_match = history_entry.iter().find(|x| x.1 == summary);
+    if let Some((name, _)) = existing_match {
+        println!(
+            "{} ({}): {} reverted to {}",
+            version, version_name, identifier, name
+        );
+        history_entry.push((String::from(version), summary));
+        return;
+    }
+    let changes = SummaryChangeReport::new(last_version, summary.clone());
+    if changes.any() {
+        println!("{} ({}): {} changed", version, version_name, identifier);
+        history_entry.push((String::from(version), summary));
+        if verbose {
+            print_changes_verbose(&changes);
+        } else {
+            print_changes(&changes);
+        }
+    }
+}
+
+fn print_changes(changes: &SummaryChangeReport) {
+    if !changes.added.is_empty() {
+        println!(
+            "\tadded {}",
+            report_characters(&changes.added.keys().copied().collect::<Vec<_>>()),
+        );
+    }
+    if !changes.removed.is_empty() {
+        println!(
+            "\tremoved {}",
+            report_characters(&changes.removed.keys().copied().collect::<Vec<_>>()),
+        );
+    }
+    if !changes.changed.is_empty() {
+        println!(
+            "\tchanged {}",
+            report_characters(&changes.changed.keys().copied().collect::<Vec<_>>()),
+        );
+    }
+}
+
+fn print_changes_verbose(changes: &SummaryChangeReport) {
+    for (char, glyph) in &changes.added {
+        println!("Added {:?} ({:04X}):", *char, Into::<u32>::into(*char));
+        match glyph {
+            GlyphSummaryEntry::Bitmap {
+                bitmap,
+                height,
+                ascent,
+                advance,
+                ..
+            } => {
+                println!(
+                    "height: {}, ascent: {}, advance: {}",
+                    height, ascent, advance
+                );
+                println!("{}", bitmap);
+            }
+            GlyphSummaryEntry::Space(width) => {
+                println!("{}-width space", width);
+            }
+        }
+    }
+    for (char, (before, after)) in &changes.changed {
+        println!("Changed {:?} ({:04X}):", *char, Into::<u32>::into(*char));
+        if let GlyphSummaryEntry::Bitmap {
+            bitmap: before_bitmap,
+            height: before_height,
+            ascent: before_ascent,
+            advance: before_advance,
+            ..
+        } = before
+            && let GlyphSummaryEntry::Bitmap {
+                bitmap: after_bitmap,
+                height: after_height,
+                ascent: after_ascent,
+                advance: after_advance,
+                ..
+            } = after
+        {
+            println!(
+                "height: {}, ascent: {}, advance: {}",
+                before_height, before_ascent, before_advance
+            );
+            println!("{}", before_bitmap);
+            println!("-->");
+            println!(
+                "height: {}, ascent: {}, advance: {}",
+                after_height, after_ascent, after_advance
+            );
+            println!("{}", after_bitmap);
+        }
+    }
+    for char in changes.removed.keys() {
+        println!("Removed {:?} ({:04X})", *char, Into::<u32>::into(*char));
+    }
 }
 
 fn pack_generate(args: &PackGenerateArgs) -> Result<(), CommandError> {

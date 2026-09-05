@@ -33,7 +33,7 @@ impl Display for Bitmap {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct Rectangle {
     pub left: usize,
     pub top: usize,
@@ -104,7 +104,7 @@ impl Bitmap {
                 }
             }
         }
-        if left == self.width || top == self.height {
+        if right == 0 {
             return None;
         }
         Some(Rectangle {

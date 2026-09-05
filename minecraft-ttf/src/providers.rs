@@ -288,11 +288,11 @@ fn image_portion(
     let bitmap = image_to_bitmap(glyph, 10);
     let resize_box = match size {
         None => {
-            let width = bitmap.content_box().map(|x| x.width).unwrap_or(0);
+            let rect = bitmap.content_box().unwrap_or_default();
             Rectangle {
                 left: 0,
                 top: 0,
-                width,
+                width: rect.left + rect.width,
                 height: bitmap.height(),
             }
         }
@@ -593,7 +593,7 @@ fn convert_bitmap_provider(
     let chars = char_images
         .into_iter()
         .map(|(char, (content_box, bitmap))| {
-            debug!("{} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
+            debug!("{:?} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
             let advance = normal_advance(&bitmap, height);
             let img = CharImage {
                 content_box,
@@ -668,7 +668,7 @@ fn convert_unihex_provider(
             even_uniform_advance(&cropped)
         };
         debug!(
-            "{} ({:04X}):\n{}\nleft: {}, right: {}, advance: {}",
+            "{:?} ({:04X}):\n{}\nleft: {}, right: {}, advance: {}",
             char,
             Into::<u32>::into(char),
             bitmap,

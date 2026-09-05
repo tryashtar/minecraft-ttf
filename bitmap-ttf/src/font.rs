@@ -341,7 +341,7 @@ impl Cmap4RangeBuilder {
         }: Cmap4Range,
     ) {
         debug!(
-            "range from {} ({:04X}) to {} ({:04X}) ({} chars)",
+            "range from {:?} ({:04X}) to {} ({:04X}) ({} chars)",
             char::from_u32(start.into()).unwrap_or('\0'),
             start,
             char::from_u32(end.into()).unwrap_or('\0'),
@@ -439,7 +439,7 @@ impl Cmap12RangeBuilder {
 
     fn push(&mut self, range: Cmap12Range) {
         debug!(
-            "range from {} ({:04X}) to {} ({:04X}) ({} chars)",
+            "range from {:?} ({:04X}) to {} ({:04X}) ({} chars)",
             char::from_u32(range.start).unwrap_or('\0'),
             range.start,
             char::from_u32(range.end).unwrap_or('\0'),
@@ -636,7 +636,7 @@ struct AddGlyphResults {
     average_advance: i16,
     unicode_ranges: u128,
     low_chars: BTreeSet<u16>,
-    chars: BTreeSet<char>,
+    _chars: BTreeSet<char>,
 }
 
 fn add_glyphs(
@@ -674,7 +674,7 @@ fn add_glyphs(
         average_advance,
         unicode_ranges: cmap_builder.unicode_ranges,
         low_chars: cmap_builder.low_pairs.keys().copied().collect(),
-        chars: cmap_builder.all_pairs.keys().copied().collect(),
+        _chars: cmap_builder.all_pairs.keys().copied().collect(),
     })
 }
 

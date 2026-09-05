@@ -6,6 +6,7 @@ use std::{
 };
 
 use bitmap_ttf::bitmap::Bitmap;
+use tracing::debug;
 
 use crate::{
     providers::{self, normal_advance, split_grid},
@@ -218,14 +219,14 @@ impl VersionCheck {
             && !version_json
                 .pack_version
                 .as_ref()
-                .is_some_and(|x| x.as_int() == pack_version)
+                .is_some_and(|x| x.as_int() >= pack_version)
         {
             return false;
         }
         if let Some(world_version) = self.world_version
             && !version_json
                 .world_version
-                .is_some_and(|x| x == world_version)
+                .is_some_and(|x| x >= world_version)
         {
             return false;
         }
@@ -494,8 +495,8 @@ fn legacy_bitmap(
                 Some(size) => *size,
                 None => {
                     let mut normal = normal_advance(bitmap, height);
-                    if normal == 8.0 {
-                        normal += 1.0;
+                    if normal == 9.0 {
+                        normal -= 1.0;
                     }
                     normal
                 }
@@ -507,15 +508,20 @@ fn legacy_bitmap(
         .into_iter()
         .map(|(char, (content_box, bitmap))| {
             let advance = char_advance(char, &bitmap);
-            (
+            debug!(
+                "{:?} ({:04X}):\n{}\nadvance: {}",
                 char,
-                providers::CharImage {
-                    content_box,
-                    bitmap,
-                    advance,
-                    bold_offset: 1.0,
-                },
-            )
+                Into::<u32>::into(char),
+                bitmap,
+                advance
+            );
+            let glyph = providers::CharImage {
+                content_box,
+                bitmap,
+                advance,
+                bold_offset: 1.0,
+            };
+            (char, glyph)
         })
         .collect();
     let provider = providers::ImageProvider {

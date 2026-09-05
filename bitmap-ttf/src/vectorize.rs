@@ -66,11 +66,10 @@ pub fn trace(graph: &BitmapGraph) -> Vec<Vec<(usize, usize)>> {
     result
 }
 
-fn adjacencies<A, B>(
-    graph: &Graph<A, B, Directed>,
-    component: &[NodeIndex],
-) -> HashMap<NodeIndex, HashSet<NodeIndex>> {
-    let mut map = HashMap::new();
+type Adjacencies = HashMap<NodeIndex, HashSet<NodeIndex>>;
+
+fn adjacencies<A, B>(graph: &Graph<A, B, Directed>, component: &[NodeIndex]) -> Adjacencies {
+    let mut map = Adjacencies::new();
     for node in component {
         let mut set = HashSet::new();
         for neighbor in graph.neighbors(*node) {
@@ -82,7 +81,7 @@ fn adjacencies<A, B>(
 }
 
 fn hierholzer_euler_circuit(
-    adjacencies: &mut HashMap<NodeIndex, HashSet<NodeIndex>>,
+    adjacencies: &mut Adjacencies,
     start_node: NodeIndex,
 ) -> VecDeque<NodeIndex> {
     let mut circuit = VecDeque::new();
