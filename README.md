@@ -1,6 +1,6 @@
 # Minecraft TTF
 
-This Python script converts Minecraft: Java Edition fonts to [TrueType Fonts (TTFs)](https://en.wikipedia.org/wiki/TrueType).
+This Rust program converts Minecraft: Java Edition fonts to [TrueType Fonts (TTFs)](https://en.wikipedia.org/wiki/TrueType).
 
 The script downloads the latest snapshot jar and reads the following font definitions:
 * [Default](https://minecraft.wiki/w/Mojangles) (`default`): The default game text font
