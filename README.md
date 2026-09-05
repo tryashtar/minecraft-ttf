@@ -21,7 +21,7 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 ## Getting Started
 
 1. [Download and extract the repo](https://github.com/tryashtar/minecraft-ttf/archive/refs/heads/master.zip) or clone it (`git clone https://github.com/tryashtar/minecraft-ttf`) and enter the directory
-2. Install [Rust](https://docs.astral.sh/uv/#installation)
+2. Install [Rust](https://rust-lang.org/tools/install/)
 3. `cargo run --release --manifest-path ./minecraft-ttf/Cargo.toml -- vanilla generate latest`
 4. Fonts will be created in the `out` folder
 
