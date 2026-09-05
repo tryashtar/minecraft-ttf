@@ -1,0 +1,27 @@
+[package]
+name = "minecraft-ttf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitmap-ttf = { path = "../bitmap-ttf"}
+clap = { version = "4.6", features = ["derive"] }
+hex = "0.4"
+image = "0.25"
+indexmap = "2.14"
+jiff = "0.2"
+json5 = "1.3"
+ndarray = "0.17"
+num = "0.4"
+num-traits = "0.2"
+reqwest = { version = "0.13", features = ["blocking"] }
+serde = { version = "1.0", features = ["derive"] }
+serde-saphyr = "1.2"
+serde_with = "3.22"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-tree = "0.4"
+url = { version = "2.5", features = ["serde"] }
+walkdir = "2.5"
+zip = { version = "8.6", features = ["jiff-02"] }

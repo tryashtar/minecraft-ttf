@@ -1,0 +1,15 @@
+[package]
+name = "bitmap-ttf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitvec = "1.1"
+indexmap = "2.14"
+jiff = "0.2"
+num-traits = "0.2"
+petgraph = "0.8"
+read-fonts = "0.43"
+thiserror = "2.0"
+tracing = "0.1"
+write-fonts = "0.52"
