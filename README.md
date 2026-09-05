@@ -3,10 +3,10 @@
 This Python script converts Minecraft: Java Edition fonts to [TrueType Fonts (TTFs)](https://en.wikipedia.org/wiki/TrueType).
 
 The script downloads the latest snapshot jar and reads the following font definitions:
-* [Default](https://minecraft.wiki/w/Mojangles) (`minecraft:default`): The default game text font
-* [Enchanting](https://minecraft.wiki/w/Standard_Galactic_Alphabet) (`minecraft:alt`): The font used in enchanting table spells
-* [Illager Runes](https://minecraft.wiki/w/Illageralt) (`minecraft:illageralt`): An unused font added in 1.18, inspired by *Minecraft Dungeons*
-* [Unicode](https://minecraft.wiki/w/GNU_Unifont) (`minecraft:uniform`): The smaller font used when the "Force Unicode Font" option is enabled
+* [Default](https://minecraft.wiki/w/Mojangles) (`default`): The default game text font
+* [Enchanting](https://minecraft.wiki/w/Standard_Galactic_Alphabet) (`alt`): The font used in enchanting table spells
+* [Illager Runes](https://minecraft.wiki/w/Illageralt) (`illageralt`): An unused font added in 1.18, inspired by *Minecraft Dungeons*
+* [Unicode](https://minecraft.wiki/w/GNU_Unifont) (`uniform`): The smaller font used when the "Force Unicode Font" option is enabled
 
 It creates regular, bold, italic, and bold italic variants of each, matching the `bold` and `italic` styles as they appear in-game.
 
@@ -20,9 +20,9 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 
 ## Getting Started
 
-1. [Download and extract the repo](https://github.com/tryashtar/minecraft-ttf/archive/refs/heads/master.zip) or clone it (`git clone https://github.com/tryashtar/minecraft-ttf`)
-2. Install [`uv`](https://docs.astral.sh/uv/#installation)
-3. `uv run src/main.py vanilla generate latest`
+1. [Download and extract the repo](https://github.com/tryashtar/minecraft-ttf/archive/refs/heads/master.zip) or clone it (`git clone https://github.com/tryashtar/minecraft-ttf`) and enter the directory
+2. Install [Rust](https://docs.astral.sh/uv/#installation)
+3. `cargo run --release --manifest-path ./minecraft-ttf/Cargo.toml -- vanilla generate latest`
 4. Fonts will be created in the `out` folder
 
 ## Command Line
@@ -32,16 +32,16 @@ There are four operations that the script can perform. You can use `--help` on a
 |Command|Description|
 |-|-|
 |`vanilla generate <version>`|Download the specified version of Minecraft and generate vanilla fonts. You can use `latest` to use the latest available snapshot version.|
-|`vanilla history`|Download *every* version of Minecraft, generate vanilla fonts from each of them in order, and export whenever an update made any changes to a font. This takes a while and downloads a lot of stuff. You can use `--start` and `--stop` to define a range of versions to download.|
-|`pack generate <version> <location> <identifier> <name>`|Generate a font from a resource pack. The pack is applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. The pack can be a folder or zip archive. The specified `name` is embedded in the generated TTF metadata.|
+|`vanilla history`|Download *every* version of Minecraft, generate vanilla fonts from each of them in order, and export whenever an update made any changes to a font. This takes a while and downloads a lot of stuff. You can use `--from` and `--to` to define a range of versions to download.|
+|`pack generate <version> <location> <identifier> <name>`|Generate a font from a resource pack. The pack is applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. The pack can be a folder or zip archive. The specified `name` is embedded in the generated TTF metadata. You can also specify `--created-time` to specify a creation time, which is also embedded in the metadata.|
 |`pack list <version> <location>`|Print a list of font identifiers available in a resource pack. You can pass any of these to `pack generate` above.|
 
 ### Optional Parameters
 
 |Option & Default|Description|
 |-|-|
-|`--identifiers minecraft:default`|For vanilla generation, specify one or more vanilla fonts to generate, from the four options `minecraft:default`, `minecraft:alt`, `minecraft:illageralt`, `minecraft:uniform`. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers). When using `minecraft:uniform`, make sure to use `--unifont-chars` as well, to specify the characters you want.|
-|`--styles regular`|Specify one or more font styles to include, from the four options `regular`, `bold`, `italic`, `bold_italic`.|
+|`--identifiers default`|For vanilla generation, specify one or more vanilla fonts to generate, from the four options `default`, `alt`, `illageralt`, `uniform`. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers). When using `uniform`, make sure to use `--unifont-chars` as well, to specify the characters you want.|
+|`--styles regular`|Specify one or more font styles to include, from the four options `regular`, `bold`, `italic`, `bold-italic`.|
 |`--color auto`|Specify which characters that come from images should be given color. Vanilla typically does not use colors, except for the potato emoji character (🥔) in [the 24w14potato April Fools update](https://minecraft.wiki/w/Java_Edition_24w14potato). Resource packs may use colors extensively.<ul><li>`always`: All characters will have color matching their image appearance. This makes all vanilla text white.</li><li>`never`: All characters will have color ignored, appearing as normal outlined glyphs.</li><li>`auto`: Images that only use white and transparency will produce normal outlined glyphs. Images that use other colors will produce colored characters.</li><ul>|
 |`--chars 00000-fffff`|Specify ranges of characters to include. Written as a comma-delimited list of hyphen-separated hex code pairs. For example, ASCII plus Greek is `0000-007f,0370-03ff`.|
 |`--unifont-chars`|Specify ranges of characters from GNU Unifont sources to include, in the same format. In older versions, Unifont sources come from various hardcoded images. In modern versions, they come from the `unihex` font provider. Including them all is not possible, since there are more glyphs than a TTF font can include.|
