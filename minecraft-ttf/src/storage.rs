@@ -30,6 +30,20 @@ pub enum StorageError {
     Json(#[from] json5::Error),
 }
 
+pub fn get_storage(path: &Path) -> Result<Box<dyn Storage>, StorageError> {
+    if path.is_dir() {
+        Ok(Box::new(FilesystemStorage {
+            root: path.to_owned(),
+        }))
+    } else if path.is_file() {
+        let file = std::fs::File::open(path)?;
+        let zip = zip::ZipArchive::new(file)?;
+        Ok(Box::new(ZipStorage { zip }))
+    } else {
+        Err(StorageError::FileNotFound(path.to_owned()))
+    }
+}
+
 #[derive(Debug)]
 pub struct FilesystemStorage {
     root: PathBuf,
@@ -39,11 +53,11 @@ impl Storage for FilesystemStorage {
     fn get_entries(&self, prefix: &Path) -> Result<HashSet<PathBuf>, StorageError> {
         let path = self.root.join(prefix);
         let mut result = HashSet::new();
-        for entry in walkdir::WalkDir::new(path) {
+        for entry in walkdir::WalkDir::new(&path) {
             let entry = entry?;
             if entry.file_type().is_file() {
-                let path = entry.into_path();
-                let partial = path.strip_prefix(&path)?;
+                let entry_path = entry.into_path();
+                let partial = entry_path.strip_prefix(&path)?;
                 result.insert(prefix.join(partial));
             }
         }

@@ -57,7 +57,7 @@ pub enum Provider {
     Space(SpaceProvider),
 }
 
-#[derive(serde_with::DeserializeFromStr, Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(serde_with::DeserializeFromStr, Debug, Clone, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Identifier {
     pub namespace: String,
     pub body: PathBuf,

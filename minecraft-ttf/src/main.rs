@@ -18,7 +18,8 @@ use tracing_subscriber::layer::SubscriberExt;
 
 use crate::{
     cache::AssetStorage,
-    font::{FontInfo, Style, StyleInfo, create_font, font_meta},
+    font::{Style, StyleInfo, create_font, font_meta},
+    storage::get_storage,
     versions::VanillaFontId,
 };
 
@@ -86,9 +87,6 @@ struct VanillaHistoryArgs {
     /// Last version to scan
     #[arg(long)]
     to: Option<String>,
-    /// Print detailed information about every changed character
-    #[arg(long)]
-    verbose: bool,
     #[command(flatten)]
     font_args: FontArgs,
     #[command(flatten)]
@@ -364,7 +362,6 @@ enum CommandError {
     UnknownVersion,
     Font(#[from] MakeFontError),
     Io(#[from] std::io::Error),
-    Yaml(#[from] serde_saphyr::Error),
 }
 
 fn run(command: Command) -> Result<(), CommandError> {
@@ -454,14 +451,15 @@ impl providers::ProviderOptions for FontArgs {
     }
 }
 
-fn version_checker() -> Result<Vec<versions::VersionUpdate>, serde_saphyr::Error> {
+fn version_checker() -> Vec<versions::VersionUpdate> {
     let version_yaml = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/versions.yaml"));
-    let versions: Vec<versions::VersionUpdate> = serde_saphyr::from_str(version_yaml)?;
-    Ok(versions)
+    let versions: Vec<versions::VersionUpdate> =
+        serde_saphyr::from_str(version_yaml).expect("versions should be configured correctly");
+    versions
 }
 
 fn vanilla_generate(args: &VanillaGenerateArgs) -> Result<(), CommandError> {
-    let checker = version_checker()?;
+    let checker = version_checker();
     let positions = positions();
     let info = load_jar_name(&args.version, &checker, &args.generic_args.cache)?;
     println!("Generating fonts from Minecraft {}", info.launcher.id);
@@ -536,8 +534,8 @@ fn generate_font(
         style_info.italic,
     )
     .map_err(MakeFontError::Coords)?;
-    let (sizes, smallest_legible) = get_pixel_info(&info);
-    print_pixel_info(&sizes);
+    let (sizes, smallest_legible) = get_pixel_info(&info.scales);
+    print_pixel_info(&info.colored, &sizes);
     let created = match created {
         Some(created) => created,
         None => providers.times.oldest.ok_or(MakeFontError::Timestamp)?,
@@ -559,13 +557,10 @@ fn generate_font(
     Ok(())
 }
 
-fn get_pixel_info(info: &FontInfo) -> (BTreeMap<u16, Vec<char>>, u16) {
-    if !info.colored.is_empty() {
-        println!("{} have color", info.colored.len())
-    }
+fn get_pixel_info(scales: &HashMap<(u16, u16), Vec<char>>) -> (BTreeMap<u16, Vec<char>>, u16) {
     let mut smallest_point = u16::MAX;
     let mut point_sizes: BTreeMap<u16, Vec<char>> = BTreeMap::new();
-    for ((num, denom), chars) in &info.scales {
+    for ((num, denom), chars) in scales {
         let top = num * 12;
         let gcd = num::integer::gcd(top, *denom);
         let point_size = top / gcd;
@@ -586,7 +581,10 @@ fn report_characters(chars: &[char]) -> String {
     )
 }
 
-fn print_pixel_info(point_sizes: &BTreeMap<u16, Vec<char>>) {
+fn print_pixel_info(colored: &[char], point_sizes: &BTreeMap<u16, Vec<char>>) {
+    if !colored.is_empty() {
+        println!("\t{} have color", report_characters(colored))
+    }
     for (point, chars) in point_sizes {
         println!(
             "\t{} will look pixel-perfect at font size multiples of {}px",
@@ -722,10 +720,26 @@ impl SummaryChangeReport {
 type HistoryTrack = HashMap<VanillaFontId, Vec<(String, ProviderGlyphSummary)>>;
 
 fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
-    let checker = version_checker()?;
+    let checker = version_checker();
     let manifest = cache::get_manifest(&args.generic_args.cache)?;
     let mut history = HistoryTrack::new();
-    for version in manifest.versions.iter().rev() {
+    let mut started = args.from.is_none();
+    let versions = manifest
+        .versions
+        .iter()
+        .rev()
+        .skip_while(|x| args.from.as_ref().is_some_and(|y| &x.id != y))
+        .take_while(|x| args.to.as_ref().is_some_and(|y| &x.id != y));
+    for version in versions {
+        if !started {
+            if let Some(from) = args.from.as_ref()
+                && from == &version.id
+            {
+                started = true;
+            } else {
+                continue;
+            }
+        }
         match load_jar_version(version, &checker, &args.generic_args.cache) {
             Err(CommandError::Version(versions::VersionError::UnknownVersion)) => {
                 continue;
@@ -752,7 +766,6 @@ fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
                             identifier,
                             &version.id,
                             &info.version.name,
-                            args.verbose,
                         );
                     }
                 }
@@ -768,7 +781,6 @@ fn vanilla_history_entry(
     identifier: &VanillaFontId,
     version: &str,
     version_name: &str,
-    verbose: bool,
 ) {
     let summary = ProviderGlyphSummary::new(providers);
     let history_entry = history.entry(*identifier).or_default();
@@ -793,11 +805,7 @@ fn vanilla_history_entry(
     if changes.any() {
         println!("{} ({}): {} changed", version, version_name, identifier);
         history_entry.push((String::from(version), summary));
-        if verbose {
-            print_changes_verbose(&changes);
-        } else {
-            print_changes(&changes);
-        }
+        print_changes(&changes);
     }
 }
 
@@ -822,67 +830,83 @@ fn print_changes(changes: &SummaryChangeReport) {
     }
 }
 
-fn print_changes_verbose(changes: &SummaryChangeReport) {
-    for (char, glyph) in &changes.added {
-        println!("Added {:?} ({:04X}):", *char, Into::<u32>::into(*char));
-        match glyph {
-            GlyphSummaryEntry::Bitmap {
-                bitmap,
-                height,
-                ascent,
-                advance,
-                ..
-            } => {
-                println!(
-                    "height: {}, ascent: {}, advance: {}",
-                    height, ascent, advance
-                );
-                println!("{}", bitmap);
-            }
-            GlyphSummaryEntry::Space(width) => {
-                println!("{}-width space", width);
-            }
-        }
-    }
-    for (char, (before, after)) in &changes.changed {
-        println!("Changed {:?} ({:04X}):", *char, Into::<u32>::into(*char));
-        if let GlyphSummaryEntry::Bitmap {
-            bitmap: before_bitmap,
-            height: before_height,
-            ascent: before_ascent,
-            advance: before_advance,
-            ..
-        } = before
-            && let GlyphSummaryEntry::Bitmap {
-                bitmap: after_bitmap,
-                height: after_height,
-                ascent: after_ascent,
-                advance: after_advance,
-                ..
-            } = after
-        {
-            println!(
-                "height: {}, ascent: {}, advance: {}",
-                before_height, before_ascent, before_advance
-            );
-            println!("{}", before_bitmap);
-            println!("-->");
-            println!(
-                "height: {}, ascent: {}, advance: {}",
-                after_height, after_ascent, after_advance
-            );
-            println!("{}", after_bitmap);
-        }
-    }
-    for char in changes.removed.keys() {
-        println!("Removed {:?} ({:04X})", *char, Into::<u32>::into(*char));
-    }
-}
-
 fn pack_generate(args: &PackGenerateArgs) -> Result<(), CommandError> {
+    let pack_storage = get_storage(&args.pack_args.location)?;
+    let checker = version_checker();
+    let positions = positions();
+    let info = load_jar_name(&args.pack_args.version, &checker, &args.generic_args.cache)?;
+    println!(
+        "Generating font {} from resource pack {} on Minecraft {}",
+        args.identifier,
+        args.pack_args
+            .location
+            .file_name()
+            .unwrap_or_default()
+            .display(),
+        info.launcher.id
+    );
+    println!("Font support level {}", info.version.name);
+    let mut stack = storage::StackStorage(vec![
+        Box::new(info.jar_store),
+        Box::new(info.asset_store),
+        pack_storage,
+    ]);
+    let missing_glyph = info.version.supports_missing_glyph().then(missing_glyph);
+    let providers = versions::get_providers(
+        &info.version,
+        &mut stack,
+        args.identifier.clone(),
+        &args.font_args,
+    )?;
+    match providers {
+        None => {
+            println!("No providers found for {}", args.identifier);
+        }
+        Some(providers) => {
+            for style in &args.generate_args.styles {
+                let style_info = style.info();
+                let ttf_name = format!(
+                    "{}-{}.ttf",
+                    args.name.replace(' ', ""),
+                    style_info.name.replace(' ', "")
+                );
+                let out_file = args.generate_args.output.join(ttf_name);
+                generate_font(
+                    &style_info,
+                    &providers,
+                    &positions,
+                    missing_glyph.as_ref(),
+                    args.name.clone(),
+                    args.created_time,
+                    &out_file,
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 
 fn pack_list(args: &PackListArgs) -> Result<(), CommandError> {
+    let pack_storage = get_storage(&args.pack_args.location)?;
+    let checker = version_checker();
+    let info = load_jar_name(&args.pack_args.version, &checker, &args.generic_args.cache)?;
+    println!(
+        "Available font identifiers in resource pack {} on Minecraft {}:",
+        args.pack_args
+            .location
+            .file_name()
+            .unwrap_or_default()
+            .display(),
+        info.launcher.id
+    );
+    let mut stack = storage::StackStorage(vec![
+        Box::new(info.jar_store),
+        Box::new(info.asset_store),
+        pack_storage,
+    ]);
+    let identifiers = info.version.available_identifiers(&mut stack)?;
+    for identifier in identifiers {
+        println!("{}", identifier);
+    }
     Ok(())
 }

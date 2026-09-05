@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    ffi::OsStr,
     fmt::Display,
     io::Read,
     path::{Path, PathBuf},
@@ -115,6 +116,44 @@ impl Default for MinecraftVersion {
 impl MinecraftVersion {
     pub fn supports_missing_glyph(&self) -> bool {
         matches!(self.providers, ProviderSupport::Supported(_))
+    }
+
+    pub fn available_identifiers(
+        &self,
+        storage: &mut impl storage::Storage,
+    ) -> Result<Vec<providers::Identifier>, storage::StorageError> {
+        match &self.providers {
+            ProviderSupport::Hardcoded(hardcoded) => {
+                let mut results = hardcoded
+                    .textures
+                    .keys()
+                    .map(|x| (*x).into())
+                    .collect::<Vec<_>>();
+                results.sort();
+                Ok(results)
+            }
+            ProviderSupport::Supported(_) => {
+                let mut results = vec![];
+                let assets = storage.get_entries(Path::new("assets"))?;
+                for asset in assets {
+                    if let Some(name) = asset.file_stem()
+                        && let Some(name) = name.to_str()
+                        && asset.extension().is_some_and(|x| x == OsStr::new("json"))
+                    {
+                        let parts = asset.iter().filter_map(|x| x.to_str()).collect::<Vec<_>>();
+                        if let [_, namespace, "font", body @ .., _end] = parts.as_slice() {
+                            let mut body = PathBuf::from_iter(body);
+                            body.push(name);
+                            let identifier =
+                                providers::Identifier::new(String::from(*namespace), body);
+                            results.push(identifier);
+                        }
+                    }
+                }
+                results.sort();
+                Ok(results)
+            }
+        }
     }
 }
 
