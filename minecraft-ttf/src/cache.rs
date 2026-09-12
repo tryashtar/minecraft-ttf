@@ -185,7 +185,7 @@ impl storage::Storage for AssetStorage {
     fn read(&mut self, entry: &Path) -> Result<Vec<u8>, storage::StorageError> {
         let data = get_asset(self, entry)?;
         let hash = &data.hash;
-        let mut cached = self.cache.join("assets/objects");
+        let mut cached = self.cache;
         cached.push(&hash[..2]);
         cached.push(hash);
         let mut url = String::from("https://resources.download.minecraft.net/");
