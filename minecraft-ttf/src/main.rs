@@ -409,11 +409,7 @@ fn load_jar_version(
     Ok(JarInfo {
         launcher: launcher_data,
         jar_store: storage::ZipStorage::new(jar),
-        asset_store: AssetStorage::new(
-            assets,
-            version.asset_mount.clone(),
-            cache.join("assets/objects"),
-        ),
+        asset_store: AssetStorage::new(assets, version.asset_mount.clone(), cache.to_owned()),
         version,
     })
 }
