@@ -341,7 +341,7 @@ impl Cmap4RangeBuilder {
         }: Cmap4Range,
     ) {
         debug!(
-            "range from {:?} ({:04X}) to {} ({:04X}) ({} chars)",
+            "cmap4 range from {:?} ({:04X}) to {:?} ({:04X}) ({} chars)",
             char::from_u32(start.into()).unwrap_or('\0'),
             start,
             char::from_u32(end.into()).unwrap_or('\0'),
@@ -439,7 +439,7 @@ impl Cmap12RangeBuilder {
 
     fn push(&mut self, range: Cmap12Range) {
         debug!(
-            "range from {:?} ({:04X}) to {} ({:04X}) ({} chars)",
+            "cmap12 range from {:?} ({:04X}) to {:?} ({:04X}) ({} chars)",
             char::from_u32(range.start).unwrap_or('\0'),
             range.start,
             char::from_u32(range.end).unwrap_or('\0'),

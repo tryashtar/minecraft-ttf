@@ -719,23 +719,13 @@ fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
     let checker = version_checker();
     let manifest = cache::get_manifest(&args.generic_args.cache)?;
     let mut history = HistoryTrack::new();
-    let mut started = args.from.is_none();
     let versions = manifest
         .versions
         .iter()
         .rev()
         .skip_while(|x| args.from.as_ref().is_some_and(|y| &x.id != y))
-        .take_while(|x| args.to.as_ref().is_some_and(|y| &x.id != y));
+        .take_while(|x| args.to.as_ref().is_none_or(|y| &x.id != y));
     for version in versions {
-        if !started {
-            if let Some(from) = args.from.as_ref()
-                && from == &version.id
-            {
-                started = true;
-            } else {
-                continue;
-            }
-        }
         match load_jar_version(version, &checker, &args.generic_args.cache) {
             Err(CommandError::Version(versions::VersionError::UnknownVersion)) => {
                 continue;

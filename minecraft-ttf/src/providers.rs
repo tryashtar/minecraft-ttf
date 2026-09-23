@@ -265,7 +265,12 @@ pub fn image_grid(
         };
         let size = match sizes {
             None => None,
-            Some(sizes) => sizes.get(char).copied(),
+            Some(sizes) => match sizes.get(char) {
+                None => {
+                    continue;
+                }
+                Some((l, r)) => Some((*l, *r)),
+            },
         };
         let portion = image_portion(image, &rectangle, size);
         map.insert(*char, (rectangle, portion));
@@ -766,7 +771,7 @@ pub fn unicode_sheets(
     let mut result = vec![];
     for sheet_id in 0u8..=0xffu8 {
         let start: u32 = Into::<u32>::into(sheet_id) * 256;
-        let chars = ndarray::Array2::from_shape_fn((16, 16), |(x, y)| {
+        let chars = ndarray::Array2::from_shape_fn((16, 16), |(y, x)| {
             char::from_u32(start + (16 * y as u32) + x as u32)
         });
         let path = template
@@ -789,9 +794,10 @@ pub fn legacy_unicode<'a>(
     let size_time = store.modified_time(sizes)?;
     times.update(size_time);
     let size_bytes = store.read(sizes)?;
-    let size_dict = size_bytes
+    let size_dict: HashMap<char, (u32, u32)> = size_bytes
         .into_iter()
         .zip('\0'..)
+        .filter(|(byte, _)| *byte > 0)
         .map(|(byte, char)| {
             (
                 char,
