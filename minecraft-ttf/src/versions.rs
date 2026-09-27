@@ -10,7 +10,7 @@ use bitmap_ttf::bitmap::Bitmap;
 use tracing::debug;
 
 use crate::{
-    providers::{self, normal_advance, split_grid},
+    providers::{self, split_grid},
     storage,
 };
 
@@ -96,6 +96,7 @@ pub struct MinecraftVersion {
     pub name: String,
     providers: ProviderSupport,
     hardcoded_spaces: Option<BTreeMap<char, f32>>,
+    auto_advance: providers::AutoAdvance,
     pub asset_mount: PathBuf,
 }
 
@@ -110,6 +111,7 @@ impl Default for MinecraftVersion {
                 unifont: None,
             })),
             hardcoded_spaces: Default::default(),
+            auto_advance: providers::AutoAdvance::LeftmostEmpty,
             asset_mount: Default::default(),
         }
     }
@@ -242,21 +244,26 @@ impl VersionUpdate {
 struct VersionCheck {
     file: Option<String>,
     no_file: Option<String>,
+    contains: Option<HashMap<String, String>>,
     pack_version: Option<u32>,
     world_version: Option<u32>,
 }
 
 impl VersionCheck {
-    fn passes(&self, names: &HashSet<&str>, version_json: &VersionJson) -> bool {
+    fn passes(
+        &self,
+        jar: &mut zip::ZipArchive<impl std::io::Read + std::io::Seek>,
+        version_json: &VersionJson,
+    ) -> Result<bool, zip::result::ZipError> {
         if let Some(file) = self.file.as_ref()
-            && !names.contains(file.as_str())
+            && let Err(zip::result::ZipError::FileNotFound) = jar.by_name(file)
         {
-            return false;
+            return Ok(false);
         }
-        if let Some(file) = self.no_file.as_ref()
-            && names.contains(file.as_str())
-        {
-            return false;
+        if let Some(file) = self.no_file.as_ref() {
+            let Err(zip::result::ZipError::FileNotFound) = jar.by_name(file) else {
+                return Ok(false);
+            };
         }
         if let Some(pack_version) = self.pack_version
             && !version_json
@@ -264,16 +271,35 @@ impl VersionCheck {
                 .as_ref()
                 .is_some_and(|x| x.as_int() >= pack_version)
         {
-            return false;
+            return Ok(false);
         }
         if let Some(world_version) = self.world_version
             && !version_json
                 .world_version
                 .is_some_and(|x| x >= world_version)
         {
-            return false;
+            return Ok(false);
         }
-        true
+        if let Some(contains) = self.contains.as_ref() {
+            for (file, data) in contains {
+                match jar.by_name(file) {
+                    Ok(mut content) => {
+                        let mut string = String::new();
+                        content.read_to_string(&mut string)?;
+                        if !string.contains(data) {
+                            return Ok(false);
+                        }
+                    }
+                    Err(zip::result::ZipError::FileNotFound) => {
+                        return Ok(false);
+                    }
+                    Err(err) => {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -284,6 +310,7 @@ enum VersionChange {
     HardcodedSpaces(Option<BTreeMap<char, f32>>),
     SetChars(SetCharChange),
     ZeroAdvances(Option<String>),
+    AutoAdvance(providers::AutoAdvance),
     Unifont(LegacyUnifont),
     AssetMount(PathBuf),
     Providers(providers::ProviderBehavior),
@@ -338,6 +365,9 @@ impl VersionChange {
                     .as_ref()
                     .map(|string| string.chars().map(|x| (x, 0.0)).collect());
             }
+            Self::AutoAdvance(advance) => {
+                version.auto_advance = *advance;
+            }
             Self::Unifont(unifont) => {
                 let legacy = &mut Self::get_legacy(version);
                 legacy.unifont = Some(unifont.clone());
@@ -379,10 +409,9 @@ pub fn detect_version(
         Err(zip::result::ZipError::FileNotFound) => VersionJson::default(),
         Err(e) => return Err(VersionError::Zip(e)),
     };
-    let names = jar.file_names().collect::<HashSet<_>>();
     let mut index = None;
     for i in (0..updates.len()).rev() {
-        if updates[i].check.passes(&names, &version_json) {
+        if updates[i].check.passes(jar, &version_json)? {
             index = Some(i);
             break;
         }
@@ -450,6 +479,7 @@ pub fn get_providers(
             let Some(real) = providers::load_providers(
                 identifier,
                 store,
+                version.auto_advance,
                 options,
                 behavior,
                 &mut HashSet::new(),
@@ -474,8 +504,14 @@ pub fn get_providers(
                 return Ok(None);
             };
             if let Some(texture) = texture {
-                let (provider, subtimes) =
-                    legacy_bitmap(store, texture, chars, hardcoded_advances.as_ref(), options)?;
+                let (provider, subtimes) = legacy_bitmap(
+                    store,
+                    texture,
+                    chars,
+                    hardcoded_advances.as_ref().unwrap_or(&HashMap::new()),
+                    version.auto_advance,
+                    options,
+                )?;
                 times.merge(subtimes);
                 providers.push(providers::Provider::Image(provider));
             }
@@ -505,7 +541,8 @@ fn legacy_bitmap(
     store: &mut impl storage::Storage,
     texture: &Path,
     chars: &CharSource,
-    advances: Option<&HashMap<char, f32>>,
+    advances: &HashMap<char, f32>,
+    auto_advances: providers::AutoAdvance,
     options: &impl providers::ProviderOptions,
 ) -> Result<(providers::ImageProvider, providers::ModifiedTimes), providers::ProvidersError> {
     let mut times = providers::ModifiedTimes::default();
@@ -532,18 +569,9 @@ fn legacy_bitmap(
     };
     let height = 8i32;
     let char_advance = |char: char, bitmap: &Bitmap| -> f32 {
-        match advances {
-            None => normal_advance(bitmap, height),
-            Some(sizes) => match sizes.get(&char) {
-                Some(size) => *size,
-                None => {
-                    let mut normal = normal_advance(bitmap, height);
-                    if normal == 9.0 {
-                        normal -= 1.0;
-                    }
-                    normal
-                }
-            },
+        match advances.get(&char) {
+            None => auto_advances.get(bitmap, height),
+            Some(advance) => *advance,
         }
     };
     let has_color = options.has_color(&image.data);

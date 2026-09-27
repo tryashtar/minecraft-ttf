@@ -291,24 +291,18 @@ fn image_portion(
         rectangle.height as u32,
     );
     let bitmap = image_to_bitmap(glyph, 10);
-    let resize_box = match size {
-        None => {
-            let rect = bitmap.content_box().unwrap_or_default();
-            Rectangle {
-                left: 0,
+    match size {
+        None => bitmap,
+        Some((left, right)) => {
+            let rect = Rectangle {
+                left: left as usize,
                 top: 0,
-                width: rect.left + rect.width,
+                width: (right - left) as usize,
                 height: bitmap.height(),
-            }
+            };
+            bitmap.resized(&rect)
         }
-        Some((left, right)) => Rectangle {
-            left: left as usize,
-            top: 0,
-            width: (right - left) as usize,
-            height: bitmap.height(),
-        },
-    };
-    bitmap.resized(&resize_box)
+    }
 }
 
 pub fn image_to_bitmap(image: image::SubImage<&image::DynamicImage>, threshold: u8) -> Bitmap {
@@ -360,9 +354,53 @@ fn passes_filter(options: &impl ProviderOptions, filter: &JsonProviderFilter) ->
     true
 }
 
-pub fn normal_advance(bitmap: &Bitmap, height: i32) -> f32 {
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoAdvance {
+    LeftmostEmpty,
+    RightmostFilled,
+}
+
+impl AutoAdvance {
+    pub fn get(&self, bitmap: &Bitmap, height: i32) -> f32 {
+        let column = match self {
+            Self::LeftmostEmpty => leftmost_empty(bitmap).unwrap_or(bitmap.width() - 1),
+            Self::RightmostFilled => rightmost_filled(bitmap).unwrap_or(0) + 1,
+        };
+        normal_advance(bitmap, height, column)
+    }
+}
+
+fn rightmost_filled(bitmap: &Bitmap) -> Option<usize> {
+    for x in (0..bitmap.width()).rev() {
+        for y in (0..bitmap.height()).rev() {
+            if bitmap.get(x, y) {
+                return Some(x);
+            }
+        }
+    }
+    None
+}
+
+fn leftmost_empty(bitmap: &Bitmap) -> Option<usize> {
+    for x in 0..bitmap.width() {
+        let mut empty = true;
+        for y in 0..bitmap.height() {
+            if bitmap.get(x, y) {
+                empty = false;
+                break;
+            }
+        }
+        if empty {
+            return Some(x);
+        }
+    }
+    None
+}
+
+fn normal_advance(bitmap: &Bitmap, height: i32, column: usize) -> f32 {
     let scale = height as f32 / bitmap.height() as f32;
-    (0.5 + bitmap.width() as f32 * scale).floor() + 1.0
+    (0.5 + column as f32 * scale).floor() + 1.0
 }
 
 pub fn uneven_uniform_advance(bitmap: &Bitmap) -> f32 {
@@ -467,6 +505,7 @@ pub enum ForceUniformBehavior {
 pub fn load_providers(
     identifier: Identifier,
     store: &mut storage::StackStorage,
+    advance: AutoAdvance,
     options: &impl ProviderOptions,
     behavior: &ProviderBehavior,
     seen: &mut HashSet<Identifier>,
@@ -495,7 +534,7 @@ pub fn load_providers(
                     .get_filter()
                     .is_none_or(|x| passes_filter(options, x))
                 {
-                    let subs = convert_provider(store, options, behavior, single, seen)?;
+                    let subs = convert_provider(store, options, advance, behavior, single, seen)?;
                     converted.extend(subs.providers);
                     times.merge(subs.times);
                 }
@@ -511,13 +550,14 @@ pub fn load_providers(
 fn convert_provider(
     store: &mut storage::StackStorage,
     options: &impl ProviderOptions,
+    advance: AutoAdvance,
     behavior: &ProviderBehavior,
     provider: JsonProvider,
     seen: &mut HashSet<Identifier>,
 ) -> Result<Providers, ProvidersError> {
     match provider {
         JsonProvider::Bitmap(bitmap) => {
-            let (result, times) = convert_bitmap_provider(store, options, &bitmap)?;
+            let (result, times) = convert_bitmap_provider(store, options, advance, &bitmap)?;
             if options.option_uniform()
                 && let ForceUniformBehavior::SkipBitmaps = behavior.uniform
             {
@@ -545,7 +585,7 @@ fn convert_provider(
                 return Err(ProvidersError::RecursiveReference);
             }
             let err_entry = reference.id.to_entry(Some("font"), Some("json"));
-            let resolved = load_providers(reference.id, store, options, behavior, seen)?
+            let resolved = load_providers(reference.id, store, advance, options, behavior, seen)?
                 .ok_or(storage::StorageError::FileNotFound(err_entry))?;
             Ok(resolved)
         }
@@ -579,6 +619,7 @@ fn convert_provider(
 fn convert_bitmap_provider(
     store: &mut impl storage::Storage,
     options: &impl ProviderOptions,
+    advance: AutoAdvance,
     bitmap: &JsonBitmapProvider,
 ) -> Result<(ImageProvider, ModifiedTimes), ProvidersError> {
     let span = span!(
@@ -599,7 +640,7 @@ fn convert_bitmap_provider(
         .into_iter()
         .map(|(char, (content_box, bitmap))| {
             debug!("{:?} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
-            let advance = normal_advance(&bitmap, height);
+            let advance = advance.get(&bitmap, height);
             let img = CharImage {
                 content_box,
                 bitmap,
