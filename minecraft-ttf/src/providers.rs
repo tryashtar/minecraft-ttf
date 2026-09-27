@@ -57,7 +57,17 @@ pub enum Provider {
     Space(SpaceProvider),
 }
 
-#[derive(serde_with::DeserializeFromStr, Debug, Clone, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(
+    serde_with::DeserializeFromStr,
+    serde::Serialize,
+    Debug,
+    Clone,
+    Hash,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
 pub struct Identifier {
     pub namespace: String,
     pub body: PathBuf,
@@ -66,10 +76,6 @@ pub struct Identifier {
 impl Identifier {
     pub fn new(namespace: String, body: PathBuf) -> Self {
         Self { namespace, body }
-    }
-
-    pub fn vanilla(body: PathBuf) -> Self {
-        Self::new(String::from("minecraft"), body)
     }
 
     pub fn from_string_unchecked(string: &str) -> Self {

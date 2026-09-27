@@ -31,16 +31,23 @@ There are four operations that the script can perform. You can use `--help` on a
 
 |Command|Description|
 |-|-|
-|`vanilla generate <version>`|Download the specified version of Minecraft and generate vanilla fonts. You can use `latest` to use the latest available snapshot version.|
-|`vanilla history`|Download *every* version of Minecraft, generate vanilla fonts from each of them in order, and export whenever an update made any changes to a font. This takes a while and downloads a lot of stuff. You can use `--from` and `--to` to define a range of versions to download.|
-|`pack generate <version> <location> <identifier> <name>`|Generate a font from a resource pack. The pack is applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. The pack can be a folder or zip archive. The specified `name` is embedded in the generated TTF metadata. You can also specify `--created-time` to specify a creation time, which is also embedded in the metadata.|
-|`pack list <version> <location>`|Print a list of font identifiers available in a resource pack. You can pass any of these to `pack generate` above.|
+|`vanilla generate <version>`|Download the specified version of Minecraft and generate a vanilla font. You can use `latest` to use the latest available snapshot version.|
+|`vanilla history`|Download *every* version of Minecraft, generate a vanilla font from each of them in order, and print information whenever an update made any changes to the font. This takes a while and downloads a lot of stuff. You can use `--from` and `--to` to define a range of versions to download.|
+|`pack generate <version> <packs>`|Generate a font from one or more resource packs. The packs are applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. A pack can be a folder or zip archive.|
+|`pack list <version> <packs>`|Print a list of font identifiers available in resource packs. You can pass any of these to `pack generate` above.|
+
+### Required Parameters
+|Option|Description|
+|-|-|
+|`--identifier`|Specify a font identifier to generate from. Vanilla's options are `default`, `alt`, `illageralt`, and `uniform`. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers). When using `uniform`, make sure to use `--unifont-chars` as well, to specify the characters you want.|
 
 ### Optional Parameters
 
 |Option & Default|Description|
 |-|-|
-|`--identifiers default`|For vanilla generation, specify one or more vanilla fonts to generate, from the four options `default`, `alt`, `illageralt`, `uniform`. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers). When using `uniform`, make sure to use `--unifont-chars` as well, to specify the characters you want.|
+|`--font-name`|Name for the generated font, embedded in TTF metadata. If unspecified, one is selected automatically from the identifier.|
+|`--font-created`|Font creation time, embedded in TTF metadata. If unspecified, one is selected automatically from the identifier or jar files.|
+|`--font-modified`|Font modification time, embedded in TTF metadata. If unspecified, one is selected automatically from the jar files.|
 |`--styles regular`|Specify one or more font styles to include, from the four options `regular`, `bold`, `italic`, `bold-italic`.|
 |`--color auto`|Specify which characters that come from images should be given color. Vanilla typically does not use colors, except for the potato emoji character (🥔) in [the 24w14potato April Fools update](https://minecraft.wiki/w/Java_Edition_24w14potato). Resource packs may use colors extensively.<ul><li>`always`: All characters will have color matching their image appearance. This makes all vanilla text white.</li><li>`never`: All characters will have color ignored, appearing as normal outlined glyphs.</li><li>`auto`: Images that only use white and transparency will produce normal outlined glyphs. Images that use other colors will produce colored characters.</li><ul>|
 |`--chars 00000-fffff`|Specify ranges of characters to include. Written as a comma-delimited list of hyphen-separated hex code pairs. For example, ASCII plus Greek is `0000-007f,0370-03ff`.|

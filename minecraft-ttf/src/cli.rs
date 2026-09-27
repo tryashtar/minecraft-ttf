@@ -2,7 +2,7 @@ use std::{fmt::Display, path::PathBuf, range::RangeInclusive, str::FromStr};
 
 use image::GenericImageView;
 
-use crate::{font, providers, versions};
+use crate::{font, providers};
 
 #[derive(clap::Parser, Debug)]
 pub struct Cli {
@@ -42,9 +42,6 @@ pub enum PackCommand {
 pub struct VanillaGenerateArgs {
     /// Name of the Minecraft version to download, or "latest"
     pub version: String,
-    /// Identifiers of the font definitions to generate fonts from
-    #[arg(long, value_delimiter=',', default_values_t = [versions::VanillaFontId::Default])]
-    pub identifiers: Vec<versions::VanillaFontId>,
     #[command(flatten)]
     pub font_args: FontArgs,
     #[command(flatten)]
@@ -55,9 +52,6 @@ pub struct VanillaGenerateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VanillaHistoryArgs {
-    /// Identifiers to check
-    #[arg(long, value_delimiter=',', default_values_t = [versions::VanillaFontId::Default])]
-    pub identifiers: Vec<versions::VanillaFontId>,
     /// First version to scan
     #[arg(long)]
     pub from: Option<String>,
@@ -85,13 +79,6 @@ pub struct VanillaVersionArgs {
 pub struct PackGenerateArgs {
     #[command(flatten)]
     pub pack_args: PackArgs,
-    /// Identifier of the font definition to generate fonts from
-    pub identifier: providers::Identifier,
-    /// Display name for the generated TTF font's metadata
-    pub name: String,
-    /// Created time for the generated TTF font's metadata
-    #[arg(long)]
-    pub created_time: Option<jiff::Timestamp>,
     #[command(flatten)]
     pub font_args: FontArgs,
     #[command(flatten)]
@@ -271,12 +258,15 @@ pub struct GenericArgs {
 pub struct PackArgs {
     /// Name of the Minecraft version the resource pack is targeting, or "latest"
     pub version: String,
-    /// Path to the resource pack folder or zip file
-    pub location: PathBuf,
+    /// One or more paths to resource pack folders or zip files
+    #[arg(num_args = 1..)]
+    pub packs: Vec<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct FontArgs {
+    #[command(flatten)]
+    pub font_info: FontInfoArgs,
     /// When to include color for characters that come from images (auto = only if any part of the image is not solid white)
     #[arg(long, default_value_t = ColorMode::Auto)]
     pub color: ColorMode,
@@ -292,6 +282,19 @@ pub struct FontArgs {
     /// Act as though the "Japanese Glyph Variants" option was enabled
     #[arg(long, default_value_t = false)]
     pub option_jp: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct FontInfoArgs {
+    /// Identifier of the font definition to generate fonts from
+    #[arg(long)]
+    pub identifier: providers::Identifier,
+    /// Display name for the generated TTF font's metadata
+    pub font_name: Option<String>,
+    /// Created time for the generated TTF font's metadata
+    pub font_created: Option<jiff::Timestamp>,
+    /// Modified time for the generated TTF font's metadata
+    pub font_modified: Option<jiff::Timestamp>,
 }
 
 #[derive(clap::Args, Debug)]

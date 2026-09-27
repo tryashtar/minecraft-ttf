@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsStr,
-    fmt::Display,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -13,83 +12,6 @@ use crate::{
     providers::{self, split_grid},
     storage,
 };
-
-#[derive(
-    clap::ValueEnum, serde::Deserialize, serde::Serialize, Debug, Clone, Copy, Hash, Eq, PartialEq,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum VanillaFontId {
-    Default,
-    Alt,
-    Illageralt,
-    Uniform,
-}
-
-impl VanillaFontId {
-    pub fn info(self) -> FontIdInfo {
-        match self {
-            Self::Default => FontIdInfo {
-                name: String::from("Minecraft Default"),
-                created: jiff::Timestamp::constant(1_242_492_720, 0),
-            },
-            Self::Alt => FontIdInfo {
-                name: String::from("Minecraft Enchanting"),
-                created: jiff::Timestamp::constant(1_317_913_020, 0),
-            },
-            Self::Illageralt => FontIdInfo {
-                name: String::from("Minecraft Illager Runes"),
-                created: jiff::Timestamp::constant(1_631_721_870, 0),
-            },
-            Self::Uniform => FontIdInfo {
-                name: String::from("Minecraft Unicode"),
-                created: jiff::Timestamp::constant(1_323_360_326, 0),
-            },
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct FontIdInfo {
-    pub name: String,
-    pub created: jiff::Timestamp,
-}
-
-impl TryFrom<&providers::Identifier> for VanillaFontId {
-    type Error = ();
-
-    fn try_from(value: &providers::Identifier) -> Result<Self, Self::Error> {
-        let providers::Identifier { namespace, body } = value;
-        match (namespace.as_str(), body) {
-            ("minecraft", path) if path == Path::new("default") => Ok(Self::Default),
-            ("minecraft", path) if path == Path::new("alt") => Ok(Self::Alt),
-            ("minecraft", path) if path == Path::new("illageralt") => Ok(Self::Illageralt),
-            ("minecraft", path) if path == Path::new("uniform") => Ok(Self::Uniform),
-            _ => Err(()),
-        }
-    }
-}
-
-impl From<VanillaFontId> for providers::Identifier {
-    fn from(value: VanillaFontId) -> Self {
-        match value {
-            VanillaFontId::Default => Self::vanilla(PathBuf::from("default")),
-            VanillaFontId::Alt => Self::vanilla(PathBuf::from("alt")),
-            VanillaFontId::Illageralt => Self::vanilla(PathBuf::from("illageralt")),
-            VanillaFontId::Uniform => Self::vanilla(PathBuf::from("uniform")),
-        }
-    }
-}
-
-impl Display for VanillaFontId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Default => write!(f, "default"),
-            Self::Alt => write!(f, "alt"),
-            Self::Illageralt => write!(f, "illageralt"),
-            Self::Uniform => write!(f, "uniform"),
-        }
-    }
-}
 
 #[derive(Debug, serde::Serialize)]
 pub struct MinecraftVersion {
@@ -128,11 +50,7 @@ impl MinecraftVersion {
     ) -> Result<Vec<providers::Identifier>, storage::StorageError> {
         match &self.providers {
             ProviderSupport::Hardcoded(hardcoded) => {
-                let mut results = hardcoded
-                    .textures
-                    .keys()
-                    .map(|x| (*x).into())
-                    .collect::<Vec<_>>();
+                let mut results = hardcoded.textures.keys().cloned().collect::<Vec<_>>();
                 results.sort();
                 Ok(results)
             }
@@ -185,7 +103,7 @@ enum ProviderSupport {
 #[derive(Debug, serde::Serialize)]
 struct HardcodedFont {
     chars: CharSource,
-    textures: HashMap<VanillaFontId, Option<PathBuf>>,
+    textures: HashMap<providers::Identifier, Option<PathBuf>>,
     hardcoded_advances: Option<HashMap<char, f32>>,
     unifont: Option<LegacyUnifont>,
 }
@@ -306,7 +224,7 @@ impl VersionCheck {
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 enum VersionChange {
-    AddTextures(HashMap<VanillaFontId, Option<PathBuf>>),
+    AddTextures(HashMap<providers::Identifier, Option<PathBuf>>),
     HardcodedSpaces(Option<BTreeMap<char, f32>>),
     SetChars(SetCharChange),
     ZeroAdvances(Option<String>),
@@ -331,7 +249,7 @@ impl VersionChange {
             Self::AddTextures(adding) => {
                 let textures = &mut Self::get_legacy(version).textures;
                 for (id, path) in adding {
-                    textures.insert(*id, path.clone());
+                    textures.insert(id.clone(), path.clone());
                 }
             }
             Self::HardcodedSpaces(spaces) => {
@@ -497,10 +415,7 @@ pub fn get_providers(
                 hardcoded_advances,
                 unifont,
             } = Box::as_ref(data);
-            let Ok(vanilla) = TryInto::<VanillaFontId>::try_into(&identifier) else {
-                return Ok(None);
-            };
-            let Some(texture) = textures.get(&vanilla) else {
+            let Some(texture) = textures.get(&identifier) else {
                 return Ok(None);
             };
             if let Some(texture) = texture {
