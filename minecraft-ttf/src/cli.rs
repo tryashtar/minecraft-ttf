@@ -39,9 +39,63 @@ pub enum PackCommand {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group(
+    clap::ArgGroup::new("jar")
+        .required(true)
+        .args(["jar_latest", "jar_vanilla", "jar_path"])
+))]
+pub struct JarArgs {
+    /// Download the latest version of Minecraft
+    #[arg(long)]
+    jar_latest: bool,
+    /// Specify a version of Minecraft to download
+    #[arg(long)]
+    jar_vanilla: Option<String>,
+    /// Specify a path to a specific Minecraft client jar
+    #[arg(long, requires = "jar_json")]
+    jar_path: Option<PathBuf>,
+    /// Specify a path to a specific Minecraft client launcher JSON file
+    #[arg(long)]
+    jar_json: Option<PathBuf>,
+    #[arg(long)]
+    /// Path to specific version capability file for this jar, instead of detecting it automatically
+    pub version_data: Option<PathBuf>,
+}
+
+impl JarArgs {
+    pub fn source(&self) -> JarSource {
+        let JarArgs {
+            jar_latest,
+            jar_vanilla,
+            jar_path,
+            jar_json,
+            ..
+        } = self;
+        match (jar_latest, jar_vanilla, jar_path, jar_json) {
+            (true, None, None, None) => JarSource::Latest,
+            (false, Some(version), None, None) => JarSource::Vanilla(version.clone()),
+            (false, None, None, Some(json)) => JarSource::Launcher { json: json.clone() },
+            (false, None, Some(jar), Some(json)) => JarSource::Full {
+                jar: jar.clone(),
+                json: json.clone(),
+            },
+            _ => unreachable!("clap validates the combinations"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum JarSource {
+    Latest,
+    Vanilla(String),
+    Launcher { json: PathBuf },
+    Full { jar: PathBuf, json: PathBuf },
+}
+
+#[derive(clap::Args, Debug)]
 pub struct VanillaGenerateArgs {
-    /// Name of the Minecraft version to download, or "latest"
-    pub version: String,
+    #[command(flatten)]
+    pub jar: JarArgs,
     #[command(flatten)]
     pub font_args: FontArgs,
     #[command(flatten)]
@@ -66,8 +120,8 @@ pub struct VanillaHistoryArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VanillaVersionArgs {
-    /// Name of the Minecraft version to download
-    pub version: String,
+    #[command(flatten)]
+    pub jar: JarArgs,
     #[command(flatten)]
     pub generic_args: GenericArgs,
     /// File to save the information to
@@ -256,8 +310,8 @@ pub struct GenericArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct PackArgs {
-    /// Name of the Minecraft version the resource pack is targeting, or "latest"
-    pub version: String,
+    #[command(flatten)]
+    pub jar: JarArgs,
     /// One or more paths to resource pack folders or zip files
     #[arg(num_args = 1..)]
     pub packs: Vec<PathBuf>,
@@ -290,10 +344,13 @@ pub struct FontInfoArgs {
     #[arg(long)]
     pub identifier: providers::Identifier,
     /// Display name for the generated TTF font's metadata
+    #[arg(long)]
     pub font_name: Option<String>,
     /// Created time for the generated TTF font's metadata
+    #[arg(long)]
     pub font_created: Option<jiff::Timestamp>,
     /// Modified time for the generated TTF font's metadata
+    #[arg(long)]
     pub font_modified: Option<jiff::Timestamp>,
 }
 

@@ -90,41 +90,74 @@ fn run(command: cli::Command) -> Result<(), CommandError> {
 
 #[derive(Debug)]
 struct JarInfo<T> {
-    launcher: cache::LauncherData,
     jar_store: storage::ZipStorage<T>,
     asset_store: cache::AssetStorage,
     version: versions::MinecraftVersion,
 }
 
-fn load_jar_name(
-    version: &str,
-    updates: &[versions::VersionUpdate],
+fn load_jar_source(
+    source: &cli::JarSource,
     cache: &Path,
-) -> Result<JarInfo<impl std::io::Read + std::io::Seek + use<>>, CommandError> {
-    let manifest = cache::get_manifest(cache)?;
-    let version_id = match version {
-        "latest" => &manifest.latest.snapshot,
-        _ => version,
-    };
-    let version = manifest
-        .find_version(version_id)
-        .ok_or(CommandError::UnknownVersion)?;
-    load_jar_version(version, updates, cache)
+) -> Result<(zip::ZipArchive<std::fs::File>, cache::LauncherData), CommandError> {
+    match source {
+        cli::JarSource::Latest => {
+            let manifest = cache::get_manifest(cache)?;
+            let version = manifest
+                .find_version(&manifest.latest.snapshot)
+                .ok_or(CommandError::UnknownVersion)?;
+            let launcher_data = cache::get_launcher(version, cache)?;
+            let jar = cache::get_jar(&launcher_data, cache)?;
+            Ok((jar, launcher_data))
+        }
+        cli::JarSource::Vanilla(version_id) => {
+            let manifest = cache::get_manifest(cache)?;
+            let version = manifest
+                .find_version(version_id)
+                .ok_or(CommandError::UnknownVersion)?;
+            let launcher_data = cache::get_launcher(version, cache)?;
+            let jar = cache::get_jar(&launcher_data, cache)?;
+            Ok((jar, launcher_data))
+        }
+        cli::JarSource::Launcher { json } => {
+            let file = std::fs::File::open(json)?;
+            let launcher_data: cache::LauncherData = serde_json::from_reader(file)?;
+            let jar = cache::get_jar(&launcher_data, cache)?;
+            Ok((jar, launcher_data))
+        }
+        cli::JarSource::Full { jar, json } => {
+            let file = std::fs::File::open(json)?;
+            let launcher_data: cache::LauncherData = serde_json::from_reader(file)?;
+            let file = std::fs::File::open(jar)?;
+            let jar = zip::ZipArchive::new(file)
+                .map_err(|x| CommandError::Storage(storage::StorageError::Zip(x)))?;
+            Ok((jar, launcher_data))
+        }
+    }
 }
 
 fn load_jar_version(
-    version: &cache::ManifestVersion,
+    local: Option<&Path>,
+    jar: &mut zip::ZipArchive<impl std::io::Read + std::io::Seek>,
     updates: &[versions::VersionUpdate],
+) -> Result<versions::MinecraftVersion, CommandError> {
+    if let Some(local) = local {
+        let file = std::fs::File::open(local)?;
+        let version: versions::MinecraftVersion = serde_json::from_reader(file)?;
+        return Ok(version);
+    }
+    Ok(versions::detect_version(updates, jar)?)
+}
+
+fn build_jar_info<T>(
+    assets: &cache::LauncherAssets,
+    jar: zip::ZipArchive<T>,
+    version: versions::MinecraftVersion,
     cache: &Path,
-) -> Result<JarInfo<impl std::io::Read + std::io::Seek + use<>>, CommandError> {
-    let launcher_data = cache::get_launcher(version, cache)?;
-    let assets = cache::get_asset_source(&launcher_data.asset_index, cache)?;
-    let mut jar = cache::get_jar(&launcher_data, cache)?;
-    let version = versions::detect_version(updates, &mut jar)?;
+) -> Result<JarInfo<T>, CommandError> {
+    let asset_source = cache::get_asset_source(assets, cache)?;
     Ok(JarInfo {
-        launcher: launcher_data,
         jar_store: storage::ZipStorage::new(jar),
-        asset_store: AssetStorage::new(assets, version.asset_mount.clone(), cache.to_owned()),
+        asset_store: AssetStorage::new(asset_source, version.asset_mount.clone(), cache.to_owned()),
         version,
     })
 }
@@ -186,9 +219,16 @@ fn get_created(args: &cli::FontInfoArgs) -> Option<jiff::Timestamp> {
 fn vanilla_generate(args: &cli::VanillaGenerateArgs) -> Result<(), CommandError> {
     let checker = version_checker();
     let positions = positions();
-    let info = load_jar_name(&args.version, &checker, &args.generic_args.cache)?;
-    println!("Generating fonts from Minecraft {}", info.launcher.id);
-    println!("Font support level {}", info.version.name);
+    let (mut jar, launcher) = load_jar_source(&args.jar.source(), &args.generic_args.cache)?;
+    println!("Generating fonts from Minecraft {}", launcher.id);
+    let version = load_jar_version(args.jar.version_data.as_deref(), &mut jar, &checker)?;
+    println!("Font support level {}", version.name);
+    let info = build_jar_info(
+        &launcher.asset_index,
+        jar,
+        version,
+        &args.generic_args.cache,
+    )?;
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
     let missing_glyph = info.version.supports_missing_glyph().then(missing_glyph);
@@ -455,8 +495,16 @@ fn vanilla_history(args: &cli::VanillaHistoryArgs) -> Result<(), CommandError> {
         .rev()
         .skip_while(|x| args.from.as_ref().is_some_and(|y| &x.id != y))
         .take_while(|x| args.to.as_ref().is_none_or(|y| &x.id != y));
-    for version in versions {
-        match load_jar_version(version, &checker, &args.generic_args.cache) {
+    for mversion in versions {
+        let launcher_data = cache::get_launcher(mversion, &args.generic_args.cache)?;
+        let mut jar = cache::get_jar(&launcher_data, &args.generic_args.cache)?;
+        let version = versions::detect_version(&checker, &mut jar)?;
+        match build_jar_info(
+            &launcher_data.asset_index,
+            jar,
+            version,
+            &args.generic_args.cache,
+        ) {
             Err(CommandError::Version(versions::VersionError::UnknownVersion)) => {
                 continue;
             }
@@ -480,7 +528,7 @@ fn vanilla_history(args: &cli::VanillaHistoryArgs) -> Result<(), CommandError> {
                         providers.providers,
                         &mut history,
                         identifier,
-                        &version.id,
+                        &mversion.id,
                         &info.version.name,
                     );
                 }
@@ -492,13 +540,7 @@ fn vanilla_history(args: &cli::VanillaHistoryArgs) -> Result<(), CommandError> {
 
 fn vanilla_version(args: &cli::VanillaVersionArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let manifest = cache::get_manifest(&args.generic_args.cache)?;
-    let mversion = manifest
-        .find_version(&args.version)
-        .ok_or(CommandError::UnknownVersion)?;
-    let cache = &args.generic_args.cache;
-    let launcher_data = cache::get_launcher(mversion, cache)?;
-    let mut jar = cache::get_jar(&launcher_data, cache)?;
+    let (mut jar, _) = load_jar_source(&args.jar.source(), &args.generic_args.cache)?;
     let version = versions::detect_version(&checker, &mut jar)?;
     let text = serde_json::to_string(&version)?;
     std::fs::write(&args.output, text)?;
@@ -563,14 +605,26 @@ fn print_changes(changes: &SummaryChangeReport) {
 fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
     let checker = version_checker();
     let positions = positions();
-    let info = load_jar_name(&args.pack_args.version, &checker, &args.generic_args.cache)?;
+    let (mut jar, launcher) =
+        load_jar_source(&args.pack_args.jar.source(), &args.generic_args.cache)?;
     println!(
         "Generating font {} from {} resource packs on Minecraft {}",
         args.font_args.font_info.identifier,
         args.pack_args.packs.len(),
-        info.launcher.id
+        launcher.id
     );
-    println!("Font support level {}", info.version.name);
+    let version = load_jar_version(
+        args.pack_args.jar.version_data.as_deref(),
+        &mut jar,
+        &checker,
+    )?;
+    println!("Font support level {}", version.name);
+    let info = build_jar_info(
+        &launcher.asset_index,
+        jar,
+        version,
+        &args.generic_args.cache,
+    )?;
     let mut storage_vec: Vec<Box<dyn storage::Storage>> =
         vec![Box::new(info.jar_store), Box::new(info.asset_store)];
     for pack in &args.pack_args.packs {
@@ -615,12 +669,24 @@ fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
 
 fn pack_list(args: &cli::PackListArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let info = load_jar_name(&args.pack_args.version, &checker, &args.generic_args.cache)?;
+    let (mut jar, launcher) =
+        load_jar_source(&args.pack_args.jar.source(), &args.generic_args.cache)?;
     println!(
         "Available font identifiers across {} resource packs on Minecraft {}:",
         args.pack_args.packs.len(),
-        info.launcher.id
+        launcher.id
     );
+    let version = load_jar_version(
+        args.pack_args.jar.version_data.as_deref(),
+        &mut jar,
+        &checker,
+    )?;
+    let info = build_jar_info(
+        &launcher.asset_index,
+        jar,
+        version,
+        &args.generic_args.cache,
+    )?;
     let mut storage_vec: Vec<Box<dyn storage::Storage>> =
         vec![Box::new(info.jar_store), Box::new(info.asset_store)];
     for pack in &args.pack_args.packs {

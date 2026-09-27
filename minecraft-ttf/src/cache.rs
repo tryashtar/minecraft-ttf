@@ -101,14 +101,28 @@ pub fn get_asset_source(index: &LauncherAssets, cache: &Path) -> Result<AssetSou
 pub fn get_jar(
     launcher: &LauncherData,
     cache: &Path,
-) -> Result<zip::ZipArchive<impl std::io::Read + std::io::Seek + use<>>, CacheError> {
+) -> Result<zip::ZipArchive<std::fs::File>, CacheError> {
     let mut cached_path = cache.join(Path::new("versions"));
     cached_path.push(&launcher.id);
     cached_path.push(&launcher.id);
     let cached_path = push_path_str(cached_path, OsStr::new(".jar"));
-    let bytes = read_or_download_bytes(&cached_path, launcher.downloads.client.url.clone())?;
-    let zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
-    Ok(zip)
+    let file = std::fs::File::open(&cached_path);
+    match file {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let url = launcher.downloads.client.url.clone();
+            info!("Downloading {} to {:?}", url, cached_path.file_name());
+            let response = reqwest::blocking::get(url)?.error_for_status()?;
+            let bytes = response.bytes()?;
+            if let Some(parent) = cached_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&cached_path, &bytes)?;
+            let file = std::fs::File::open(&cached_path)?;
+            Ok(zip::ZipArchive::new(file)?)
+        }
+        Err(e) => Err(CacheError::Io(e)),
+        Ok(file) => Ok(zip::ZipArchive::new(file)?),
+    }
 }
 
 pub fn push_path_str(path: PathBuf, str: &OsStr) -> PathBuf {

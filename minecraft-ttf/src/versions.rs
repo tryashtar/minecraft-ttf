@@ -13,7 +13,7 @@ use crate::{
     storage,
 };
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct MinecraftVersion {
     pub name: String,
     providers: ProviderSupport,
@@ -86,21 +86,21 @@ struct LegacyUnifont {
     uneven_spacing: bool,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CharSource {
     FromFile(PathBuf),
     Hardcoded(ndarray::Array2<Option<char>>),
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ProviderSupport {
     Supported(providers::ProviderBehavior),
     Hardcoded(Box<HardcodedFont>),
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct HardcodedFont {
     chars: CharSource,
     textures: HashMap<providers::Identifier, Option<PathBuf>>,

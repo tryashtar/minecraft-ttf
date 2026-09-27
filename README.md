@@ -22,7 +22,7 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 
 1. [Download and extract the repo](https://github.com/tryashtar/minecraft-ttf/archive/refs/heads/master.zip) or clone it (`git clone https://github.com/tryashtar/minecraft-ttf`) and enter the directory
 2. Install [Rust](https://rust-lang.org/tools/install/)
-3. `cargo run --release --manifest-path ./minecraft-ttf/Cargo.toml -- vanilla generate latest`
+3. `cargo run --release --manifest-path ./minecraft-ttf/Cargo.toml -- vanilla generate --jar-latest --identifier default`
 4. Fonts will be created in the `out` folder
 
 ## Command Line
@@ -39,6 +39,9 @@ There are four operations that the script can perform. You can use `--help` on a
 ### Required Parameters
 |Option|Description|
 |-|-|
+|`--jar-latest`|Download and use the latest Minecraft snapshot jar.|
+|`--jar-vanilla <name>`|Download and use a specific Minecraft jar.|
+|`--jar-json <path>`|Read a Minecraft launcher JSON file, and download and use its jar. Specify `--jar-path <path>` as well to use a jar directly.|
 |`--identifier`|Specify a font identifier to generate from. Vanilla's options are `default`, `alt`, `illageralt`, and `uniform`. In older versions, these correspond to various hardcoded images and characters. In modern versions, these are data-driven [font providers](https://minecraft.wiki/w/Font#Providers). When using `uniform`, make sure to use `--unifont-chars` as well, to specify the characters you want.|
 
 ### Optional Parameters
