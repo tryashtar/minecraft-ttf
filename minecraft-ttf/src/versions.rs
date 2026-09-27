@@ -14,7 +14,9 @@ use crate::{
     storage,
 };
 
-#[derive(clap::ValueEnum, serde::Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(
+    clap::ValueEnum, serde::Deserialize, serde::Serialize, Debug, Clone, Copy, Hash, Eq, PartialEq,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum VanillaFontId {
     Default,
@@ -89,7 +91,7 @@ impl Display for VanillaFontId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct MinecraftVersion {
     pub name: String,
     providers: ProviderSupport,
@@ -157,26 +159,28 @@ impl MinecraftVersion {
     }
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
 struct LegacyUnifont {
     template: String,
     sizes: PathBuf,
     uneven_spacing: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CharSource {
     FromFile(PathBuf),
     Hardcoded(ndarray::Array2<Option<char>>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum ProviderSupport {
     Supported(providers::ProviderBehavior),
     Hardcoded(Box<HardcodedFont>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 struct HardcodedFont {
     chars: CharSource,
     textures: HashMap<VanillaFontId, Option<PathBuf>>,

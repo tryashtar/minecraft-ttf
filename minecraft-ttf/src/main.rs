@@ -51,6 +51,8 @@ enum VanillaCommand {
     Generate(VanillaGenerateArgs),
     /// Generate all unique TTF fonts across Minecraft's history
     History(VanillaHistoryArgs),
+    /// Generate data about how a Minecraft version handles fonts
+    Version(VanillaVersionArgs),
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -91,6 +93,17 @@ struct VanillaHistoryArgs {
     font_args: FontArgs,
     #[command(flatten)]
     generic_args: GenericArgs,
+}
+
+#[derive(clap::Args, Debug)]
+struct VanillaVersionArgs {
+    /// Name of the Minecraft version to download
+    version: String,
+    #[command(flatten)]
+    generic_args: GenericArgs,
+    /// File to save the information to
+    #[arg(long, default_value = "version.json")]
+    output: PathBuf,
 }
 
 #[derive(clap::Args, Debug)]
@@ -362,12 +375,14 @@ enum CommandError {
     UnknownVersion,
     Font(#[from] MakeFontError),
     Io(#[from] std::io::Error),
+    Serde(#[from] serde_json::Error),
 }
 
 fn run(command: Command) -> Result<(), CommandError> {
     match command {
         Command::Vanilla(VanillaCommand::Generate(args)) => vanilla_generate(&args),
         Command::Vanilla(VanillaCommand::History(args)) => vanilla_history(&args),
+        Command::Vanilla(VanillaCommand::Version(args)) => vanilla_version(&args),
         Command::Pack(PackCommand::Generate(args)) => pack_generate(&args),
         Command::Pack(PackCommand::List(args)) => pack_list(&args),
     }
@@ -448,7 +463,7 @@ impl providers::ProviderOptions for FontArgs {
 }
 
 fn version_checker() -> Vec<versions::VersionUpdate> {
-    let version_yaml = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/versions.yaml"));
+    let version_yaml = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/updates.yaml"));
     let versions: Vec<versions::VersionUpdate> =
         serde_saphyr::from_str(version_yaml).expect("versions should be configured correctly");
     versions
@@ -758,6 +773,21 @@ fn vanilla_history(args: &VanillaHistoryArgs) -> Result<(), CommandError> {
             }
         }
     }
+    Ok(())
+}
+
+fn vanilla_version(args: &VanillaVersionArgs) -> Result<(), CommandError> {
+    let checker = version_checker();
+    let manifest = cache::get_manifest(&args.generic_args.cache)?;
+    let mversion = manifest
+        .find_version(&args.version)
+        .ok_or(CommandError::UnknownVersion)?;
+    let cache = &args.generic_args.cache;
+    let launcher_data = cache::get_launcher(mversion, cache)?;
+    let mut jar = cache::get_jar(&launcher_data, cache)?;
+    let version = versions::detect_version(&checker, &mut jar)?;
+    let text = serde_json::to_string(&version)?;
+    std::fs::write(&args.output, text)?;
     Ok(())
 }
 

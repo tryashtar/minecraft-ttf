@@ -450,13 +450,13 @@ struct UnihexSizeOverride {
     right: u32,
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
 pub struct ProviderBehavior {
     pub uniform: ForceUniformBehavior,
     pub uneven_unifont: bool,
 }
 
-#[derive(serde::Deserialize, Debug, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ForceUniformBehavior {
     Filter,
@@ -796,8 +796,14 @@ pub fn legacy_unicode<'a>(
     let size_bytes = store.read(sizes)?;
     let size_dict: HashMap<char, (u32, u32)> = size_bytes
         .into_iter()
-        .zip('\0'..)
-        .filter(|(byte, _)| *byte > 0)
+        .zip(0u32..)
+        .filter_map(|(byte, char)| {
+            if byte > 0 {
+                char::from_u32(char).map(|x| (byte, x))
+            } else {
+                None
+            }
+        })
         .map(|(byte, char)| {
             (
                 char,

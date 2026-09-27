@@ -1699,6 +1699,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde-saphyr",
+ "serde_json",
  "serde_with",
  "thiserror",
  "tracing",
@@ -1753,6 +1754,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+ "serde",
 ]
 
 [[package]]
