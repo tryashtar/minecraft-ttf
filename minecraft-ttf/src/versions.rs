@@ -5,7 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bitmap_ttf::bitmap::Bitmap;
+use bitmap_ttf::{
+    bitmap::Bitmap,
+    font::{FontPositions, ScriptPositions},
+};
 use tracing::debug;
 
 use crate::{
@@ -19,6 +22,7 @@ pub struct MinecraftVersion {
     providers: ProviderSupport,
     hardcoded_spaces: BTreeMap<char, f32>,
     auto_advance: providers::AutoAdvance,
+    aligned_strikethrough: bool,
     pub asset_mount: PathBuf,
 }
 
@@ -35,6 +39,7 @@ impl Default for MinecraftVersion {
             hardcoded_spaces: Default::default(),
             auto_advance: providers::AutoAdvance::LeftmostEmpty,
             asset_mount: Default::default(),
+            aligned_strikethrough: true,
         }
     }
 }
@@ -75,6 +80,37 @@ impl MinecraftVersion {
                 results.sort();
                 Ok(results)
             }
+        }
+    }
+
+    pub fn positions(&self) -> FontPositions {
+        FontPositions {
+            ascent: 9.0 / 12.0,
+            descent: 2.0 / 12.0,
+            s_cap_height: 7.0 / 12.0,
+            sx_height: 5.0 / 12.0,
+            y_strikeout_position: if self.aligned_strikethrough {
+                4.0 / 12.0
+            } else {
+                3.5 / 12.0
+            },
+            y_strikeout_size: 1.0 / 12.0,
+            underline_position: -1.0 / 12.0,
+            underline_thickness: 1.0 / 12.0,
+            line_gap: -1.0 / 12.0,
+            italic_angle: 4.0f64.atan2(1.0).to_degrees() - 90.0,
+            subscript: ScriptPositions {
+                x_size: 4.0 / 12.0,
+                y_size: 5.0 / 12.0,
+                x_offset: 0.0 / 12.0,
+                y_offset: 1.0 / 12.0,
+            },
+            superscript: ScriptPositions {
+                x_size: 4.0 / 12.0,
+                y_size: 5.0 / 12.0,
+                x_offset: 0.0 / 12.0,
+                y_offset: 2.0 / 12.0,
+            },
         }
     }
 }
@@ -232,6 +268,7 @@ enum VersionChange {
     Unifont(LegacyUnifont),
     AssetMount(PathBuf),
     Providers(providers::ProviderBehavior),
+    AlignedStrikethrough(bool),
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -305,6 +342,9 @@ impl VersionChange {
             }
             Self::Providers(behavior) => {
                 version.providers = ProviderSupport::Supported(behavior.clone());
+            }
+            Self::AlignedStrikethrough(aligned) => {
+                version.aligned_strikethrough = *aligned;
             }
         }
     }

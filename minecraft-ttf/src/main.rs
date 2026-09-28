@@ -7,7 +7,7 @@ use std::{
 
 use bitmap_ttf::{
     bitmap::Bitmap,
-    font::{FontPositions, MakeFontError, ScriptPositions, make_font},
+    font::{FontPositions, MakeFontError, make_font},
 };
 use clap::Parser;
 use tracing::error;
@@ -218,10 +218,10 @@ fn get_created(args: &cli::FontInfoArgs) -> Option<jiff::Timestamp> {
 
 fn vanilla_generate(args: &cli::VanillaGenerateArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let positions = positions();
     let (mut jar, launcher) = load_jar_source(&args.jar.source(), &args.generic_args.cache)?;
     println!("Generating fonts from Minecraft {}", launcher.id);
     let version = load_jar_version(args.jar.version_data.as_deref(), &mut jar, &checker)?;
+    let positions = version.positions();
     println!("Font support level {}", version.name);
     let info = build_jar_info(
         &launcher.asset_index,
@@ -363,33 +363,6 @@ fn print_pixel_info(colored: &[char], point_sizes: &BTreeMap<u16, Vec<char>>) {
             "\tAll characters in this font will look pixel-perfect at font size multiples of {}px",
             lcm
         );
-    }
-}
-
-fn positions() -> FontPositions {
-    FontPositions {
-        ascent: 9.0 / 12.0,
-        descent: 2.0 / 12.0,
-        s_cap_height: 7.0 / 12.0,
-        sx_height: 5.0 / 12.0,
-        y_strikeout_position: 4.0 / 12.0,
-        y_strikeout_size: 1.0 / 12.0,
-        underline_position: -1.0 / 12.0,
-        underline_thickness: 1.0 / 12.0,
-        line_gap: -1.0 / 12.0,
-        italic_angle: 4.0f64.atan2(1.0).to_degrees() - 90.0,
-        subscript: ScriptPositions {
-            x_size: 4.0 / 12.0,
-            y_size: 5.0 / 12.0,
-            x_offset: 0.0 / 12.0,
-            y_offset: 1.0 / 12.0,
-        },
-        superscript: ScriptPositions {
-            x_size: 4.0 / 12.0,
-            y_size: 5.0 / 12.0,
-            x_offset: 0.0 / 12.0,
-            y_offset: 2.0 / 12.0,
-        },
     }
 }
 
@@ -604,7 +577,6 @@ fn print_changes(changes: &SummaryChangeReport) {
 
 fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let positions = positions();
     let (mut jar, launcher) =
         load_jar_source(&args.pack_args.jar.source(), &args.generic_args.cache)?;
     println!(
@@ -618,6 +590,7 @@ fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
         &mut jar,
         &checker,
     )?;
+    let positions = version.positions();
     println!("Font support level {}", version.name);
     let info = build_jar_info(
         &launcher.asset_index,

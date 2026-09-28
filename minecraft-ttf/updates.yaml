@@ -129,6 +129,13 @@
     - "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜø£Ø×ƒáíóúñÑªº¿®¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αβΓπΣσμτΦΘΩδ∞∅∈∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■"
     - 1
 
+- name: 1.13-pre6+
+  check:
+    contains:
+      assets/minecraft/lang/en_us.json: menu.working
+  changes:
+  - aligned_strikethrough: false
+
 - name: 1.13-pre7+
   check:
     file: assets/minecraft/font/default.json
