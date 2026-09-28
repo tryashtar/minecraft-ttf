@@ -104,7 +104,7 @@ enum ProviderSupport {
 struct HardcodedFont {
     chars: CharSource,
     textures: HashMap<providers::Identifier, Option<PathBuf>>,
-    hardcoded_advances: HashMap<char, f32>,
+    hardcoded_advances: BTreeMap<char, f32>,
     unifont: Option<LegacyUnifont>,
 }
 
@@ -285,7 +285,7 @@ impl VersionChange {
             }
             Self::SpecialAdvances(data) => {
                 let legacy = &mut Self::get_legacy(version);
-                let mut map = HashMap::new();
+                let mut map = BTreeMap::new();
                 for entry in data {
                     for char in entry.chars.chars() {
                         map.insert(char, entry.advance);
@@ -466,7 +466,7 @@ fn legacy_bitmap(
     store: &mut impl storage::Storage,
     texture: &Path,
     chars: &CharSource,
-    advances: &HashMap<char, f32>,
+    advances: &BTreeMap<char, f32>,
     auto_advances: providers::AutoAdvance,
     options: &impl providers::ProviderOptions,
 ) -> Result<(providers::ImageProvider, providers::ModifiedTimes), providers::ProvidersError> {

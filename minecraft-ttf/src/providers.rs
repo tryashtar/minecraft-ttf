@@ -59,7 +59,7 @@ pub enum Provider {
 
 #[derive(
     serde_with::DeserializeFromStr,
-    serde::Serialize,
+    serde_with::SerializeDisplay,
     Debug,
     Clone,
     Hash,
