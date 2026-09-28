@@ -12,30 +12,96 @@ pub struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Generate TTF fonts from the vanilla game jar
-    #[clap(subcommand)]
-    Vanilla(VanillaCommand),
-    /// List or generate fonts from a resource pack
-    #[clap(subcommand)]
-    Pack(PackCommand),
-}
-
-#[derive(clap::Subcommand, Debug)]
-pub enum VanillaCommand {
-    /// Generate TTF fonts from a specific version
-    Generate(VanillaGenerateArgs),
-    /// Generate all unique TTF fonts across Minecraft's history
-    History(VanillaHistoryArgs),
-    /// Generate data about how a Minecraft version handles fonts
-    Version(VanillaVersionArgs),
-}
-
-#[derive(clap::Subcommand, Debug)]
-pub enum PackCommand {
-    /// Generate one TTF font from a resource pack
-    Generate(PackGenerateArgs),
+    /// Generate TTF fonts from Minecraft
+    Generate(GenerateArgs),
     /// List available font identifiers
-    List(PackListArgs),
+    List(ListArgs),
+    /// Export structured information about a version or font
+    #[clap(subcommand)]
+    Export(ExportCommand),
+    /// Print the changes to fonts across Minecraft's history
+    History(HistoryArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct GenerateArgs {
+    /// Identifier of the font definition to generate fonts from
+    #[arg(long)]
+    pub identifier: providers::Identifier,
+    /// Styles to generate
+    #[arg(long, value_delimiter=',', default_values_t = [font::Style::Regular])]
+    pub styles: Vec<font::Style>,
+    /// Folder to save the generated fonts in
+    #[arg(long, default_value = "out")]
+    pub output: PathBuf,
+    #[command(flatten)]
+    pub jar_args: JarArgs,
+    #[command(flatten)]
+    pub font_args: FontArgs,
+    #[command(flatten)]
+    pub meta_args: FontMetaArgs,
+    #[command(flatten)]
+    pub generic_args: GenericArgs,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ListArgs {
+    #[command(flatten)]
+    pub jar_args: JarArgs,
+    #[command(flatten)]
+    pub generic_args: GenericArgs,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HistoryArgs {
+    /// Identifier of the font definition to track
+    #[arg(long)]
+    pub identifier: providers::Identifier,
+    /// First version to scan
+    #[arg(long)]
+    pub from: Option<String>,
+    /// Last version to scan
+    #[arg(long)]
+    pub to: Option<String>,
+    #[command(flatten)]
+    pub font_args: FontArgs,
+    #[command(flatten)]
+    pub generic_args: GenericArgs,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ExportCommand {
+    /// Export information about a specific version
+    Version(ExportVersionArgs),
+    /// Export information about a font
+    Font(ExportFontArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ExportVersionArgs {
+    /// File to save the information to
+    #[arg(long, default_value = "version.json")]
+    pub output: PathBuf,
+    #[command(flatten)]
+    pub jar_args: JarArgs,
+    #[command(flatten)]
+    pub generic_args: GenericArgs,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ExportFontArgs {
+    /// Identifier of the font definition
+    #[arg(long)]
+    pub identifier: providers::Identifier,
+    /// File to save the information to
+    #[arg(long, default_value = "font.json")]
+    pub output: PathBuf,
+    #[command(flatten)]
+    pub jar_args: JarArgs,
+    #[command(flatten)]
+    pub font_args: FontArgs,
+    #[command(flatten)]
+    pub generic_args: GenericArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -60,6 +126,9 @@ pub struct JarArgs {
     #[arg(long)]
     /// Path to specific version capability file for this jar, instead of detecting it automatically
     pub version_data: Option<PathBuf>,
+    /// One or more paths to resource pack folders or zip files to apply on top of the jar
+    #[arg(long, num_args = 1..)]
+    pub packs: Vec<PathBuf>,
 }
 
 impl JarArgs {
@@ -100,51 +169,6 @@ pub struct VanillaGenerateArgs {
     pub font_args: FontArgs,
     #[command(flatten)]
     pub generate_args: GenerateArgs,
-    #[command(flatten)]
-    pub generic_args: GenericArgs,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct VanillaHistoryArgs {
-    /// First version to scan
-    #[arg(long)]
-    pub from: Option<String>,
-    /// Last version to scan
-    #[arg(long)]
-    pub to: Option<String>,
-    #[command(flatten)]
-    pub font_args: FontArgs,
-    #[command(flatten)]
-    pub generic_args: GenericArgs,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct VanillaVersionArgs {
-    #[command(flatten)]
-    pub jar: JarArgs,
-    #[command(flatten)]
-    pub generic_args: GenericArgs,
-    /// File to save the information to
-    #[arg(long, default_value = "version.json")]
-    pub output: PathBuf,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct PackGenerateArgs {
-    #[command(flatten)]
-    pub pack_args: PackArgs,
-    #[command(flatten)]
-    pub font_args: FontArgs,
-    #[command(flatten)]
-    pub generate_args: GenerateArgs,
-    #[command(flatten)]
-    pub generic_args: GenericArgs,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct PackListArgs {
-    #[command(flatten)]
-    pub pack_args: PackArgs,
     #[command(flatten)]
     pub generic_args: GenericArgs,
 }
@@ -309,18 +333,7 @@ pub struct GenericArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct PackArgs {
-    #[command(flatten)]
-    pub jar: JarArgs,
-    /// One or more paths to resource pack folders or zip files
-    #[arg(num_args = 1..)]
-    pub packs: Vec<PathBuf>,
-}
-
-#[derive(clap::Args, Debug)]
 pub struct FontArgs {
-    #[command(flatten)]
-    pub font_info: FontInfoArgs,
     /// When to include color for characters that come from images (auto = only if any part of the image is not solid white)
     #[arg(long, default_value_t = ColorMode::Auto)]
     pub color: ColorMode,
@@ -339,10 +352,7 @@ pub struct FontArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct FontInfoArgs {
-    /// Identifier of the font definition to generate fonts from
-    #[arg(long)]
-    pub identifier: providers::Identifier,
+pub struct FontMetaArgs {
     /// Display name for the generated TTF font's metadata
     #[arg(long)]
     pub font_name: Option<String>,
@@ -352,16 +362,6 @@ pub struct FontInfoArgs {
     /// Modified time for the generated TTF font's metadata
     #[arg(long)]
     pub font_modified: Option<jiff::Timestamp>,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct GenerateArgs {
-    /// Styles to generate
-    #[arg(long, value_delimiter=',', default_values_t = [font::Style::Regular])]
-    pub styles: Vec<font::Style>,
-    /// Folder to save the generated fonts in
-    #[arg(long, default_value = "out")]
-    pub output: PathBuf,
 }
 
 fn image_has_color(image: &image::DynamicImage) -> bool {

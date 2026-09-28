@@ -14,30 +14,64 @@ use tracing::{Level, debug, span};
 
 use crate::{cache, storage};
 
-#[derive(Debug, PartialEq)]
+fn serialize_rectangle<S>(rectangle: &Rectangle, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let mut state = serializer.serialize_struct("Rectangle", 4)?;
+    serde::ser::SerializeStruct::serialize_field(&mut state, "left", &rectangle.left)?;
+    serde::ser::SerializeStruct::serialize_field(&mut state, "top", &rectangle.top)?;
+    serde::ser::SerializeStruct::serialize_field(&mut state, "width", &rectangle.width)?;
+    serde::ser::SerializeStruct::serialize_field(&mut state, "height", &rectangle.height)?;
+    serde::ser::SerializeStruct::end(state)
+}
+
+fn serialize_bitmap<S>(bitmap: &Bitmap, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let mut state = serializer.serialize_struct("Bitmap", 3)?;
+    serde::ser::SerializeStruct::serialize_field(&mut state, "width", &bitmap.width())?;
+    serde::ser::SerializeStruct::serialize_field(&mut state, "height", &bitmap.height())?;
+    let rows: Vec<String> = (0..bitmap.height())
+        .map(|y| {
+            (0..bitmap.width())
+                .map(|x| if bitmap.get(x, y) { '1' } else { '0' })
+                .collect()
+        })
+        .collect();
+    serde::ser::SerializeStruct::serialize_field(&mut state, "bits", &rows)?;
+    serde::ser::SerializeStruct::end(state)
+}
+
+#[derive(Debug, serde::Serialize, PartialEq)]
 pub struct CharBitmap {
+    #[serde(serialize_with = "serialize_bitmap")]
     pub bitmap: Bitmap,
     pub advance: f32,
     pub bold_offset: f32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, serde::Serialize, PartialEq)]
 pub struct BitmapProvider {
     pub height: i32,
     pub ascent: i32,
     pub chars: indexmap::IndexMap<char, CharBitmap>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, serde::Serialize, PartialEq)]
 pub struct CharImage {
+    #[serde(serialize_with = "serialize_rectangle")]
     pub content_box: Rectangle,
+    #[serde(serialize_with = "serialize_bitmap")]
     pub bitmap: Bitmap,
     pub advance: f32,
     pub bold_offset: f32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, serde::Serialize, PartialEq)]
 pub struct ImageProvider {
+    #[serde(skip)]
     pub image: image::DynamicImage,
     pub has_color: bool,
     pub height: i32,
@@ -45,12 +79,13 @@ pub struct ImageProvider {
     pub chars: indexmap::IndexMap<char, CharImage>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, serde::Serialize, PartialEq)]
 pub struct SpaceProvider {
     pub chars: BTreeMap<char, f32>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Provider {
     Bitmap(BitmapProvider),
     Image(ImageProvider),
@@ -178,7 +213,7 @@ impl Display for Identifier {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ModifiedTimes {
     pub oldest: Option<jiff::Timestamp>,
     pub newest: Option<jiff::Timestamp>,
@@ -204,7 +239,7 @@ impl ModifiedTimes {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct Providers {
     pub providers: Vec<Provider>,
     pub times: ModifiedTimes,

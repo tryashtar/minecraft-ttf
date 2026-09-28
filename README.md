@@ -22,19 +22,20 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 
 1. [Download and extract the repo](https://github.com/tryashtar/minecraft-ttf/archive/refs/heads/master.zip) or clone it (`git clone https://github.com/tryashtar/minecraft-ttf`) and enter the directory
 2. Install [Rust](https://rust-lang.org/tools/install/)
-3. `cargo run --release --manifest-path ./minecraft-ttf/Cargo.toml -- vanilla generate --jar-latest --identifier default`
+3. `cargo run --release --manifest-path ./minecraft-ttf/Cargo.toml -- generate --jar-latest --identifier default`
 4. Fonts will be created in the `out` folder
 
 ## Command Line
 
-There are four operations that the script can perform. You can use `--help` on a partial command to see the available options as well.
+There are five operations that the script can perform. You can use `--help` on a partial command to see the available options as well.
 
 |Command|Description|
 |-|-|
-|`vanilla generate <version>`|Download the specified version of Minecraft and generate a vanilla font. You can use `latest` to use the latest available snapshot version.|
-|`vanilla history`|Download *every* version of Minecraft, generate a vanilla font from each of them in order, and print information whenever an update made any changes to the font. This takes a while and downloads a lot of stuff. You can use `--from` and `--to` to define a range of versions to download.|
-|`pack generate <version> <packs>`|Generate a font from one or more resource packs. The packs are applied on top of the vanilla game, so packs that modify vanilla providers or textures can produce full fonts. A pack can be a folder or zip archive.|
-|`pack list <version> <packs>`|Print a list of font identifiers available in resource packs. You can pass any of these to `pack generate` above.|
+|`generate`|Generate a TTF font from Minecraft.|
+|`list`|Print a list of font identifiers available. You can pass any of these to `generate`.|
+|`history`|Download *every* version of Minecraft, and print information whenever an update made any changes to the font. This takes a while and downloads a lot of stuff. You can use `--from` and `--to` to define a range of versions to download.|
+|`export version`|Export JSON information that was autodetected from the specified jar.|
+|`export font`|Export JSON information about a font.|
 
 ### Required Parameters
 |Option|Description|
@@ -48,6 +49,7 @@ There are four operations that the script can perform. You can use `--help` on a
 
 |Option & Default|Description|
 |-|-|
+|`--packs`|Paths to one or more resource packs to apply on top of the Minecraft jar.|
 |`--font-name`|Name for the generated font, embedded in TTF metadata. If unspecified, one is selected automatically from the identifier.|
 |`--font-created`|Font creation time, embedded in TTF metadata. If unspecified, one is selected automatically from the identifier or jar files.|
 |`--font-modified`|Font modification time, embedded in TTF metadata. If unspecified, one is selected automatically from the jar files.|

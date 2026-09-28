@@ -80,11 +80,11 @@ enum CommandError {
 
 fn run(command: cli::Command) -> Result<(), CommandError> {
     match command {
-        cli::Command::Vanilla(cli::VanillaCommand::Generate(args)) => vanilla_generate(&args),
-        cli::Command::Vanilla(cli::VanillaCommand::History(args)) => vanilla_history(&args),
-        cli::Command::Vanilla(cli::VanillaCommand::Version(args)) => vanilla_version(&args),
-        cli::Command::Pack(cli::PackCommand::Generate(args)) => pack_generate(&args),
-        cli::Command::Pack(cli::PackCommand::List(args)) => pack_list(&args),
+        cli::Command::Generate(args) => run_generate(&args),
+        cli::Command::History(args) => run_history(&args),
+        cli::Command::List(args) => run_list(&args),
+        cli::Command::Export(cli::ExportCommand::Version(args)) => run_export_version(&args),
+        cli::Command::Export(cli::ExportCommand::Font(args)) => run_export_font(&args),
     }
 }
 
@@ -169,11 +169,11 @@ fn version_checker() -> Vec<versions::VersionUpdate> {
     versions
 }
 
-fn get_name(args: &cli::FontInfoArgs) -> String {
+fn get_name(args: &cli::FontMetaArgs, identifier: &providers::Identifier) -> String {
     if let Some(name) = args.font_name.as_ref() {
         return name.clone();
     }
-    let providers::Identifier { namespace, body } = &args.identifier;
+    let providers::Identifier { namespace, body } = identifier;
     match (namespace.as_str(), body) {
         ("minecraft", path) if path == Path::new("default") => String::from("Minecraft Default"),
         ("minecraft", path) if path == Path::new("alt") => String::from("Minecraft Enchanting"),
@@ -194,11 +194,14 @@ fn get_name(args: &cli::FontInfoArgs) -> String {
     }
 }
 
-fn get_created(args: &cli::FontInfoArgs) -> Option<jiff::Timestamp> {
+fn get_created(
+    args: &cli::FontMetaArgs,
+    identifier: &providers::Identifier,
+) -> Option<jiff::Timestamp> {
     if let Some(date) = args.font_created.as_ref() {
         return Some(*date);
     }
-    let providers::Identifier { namespace, body } = &args.identifier;
+    let providers::Identifier { namespace, body } = identifier;
     match (namespace.as_str(), body) {
         ("minecraft", path) if path == Path::new("default") => {
             Some(jiff::Timestamp::constant(1_242_492_720, 0))
@@ -214,57 +217,6 @@ fn get_created(args: &cli::FontInfoArgs) -> Option<jiff::Timestamp> {
         }
         (_, _) => None,
     }
-}
-
-fn vanilla_generate(args: &cli::VanillaGenerateArgs) -> Result<(), CommandError> {
-    let checker = version_checker();
-    let (mut jar, launcher) = load_jar_source(&args.jar.source(), &args.generic_args.cache)?;
-    println!("Generating fonts from Minecraft {}", launcher.id);
-    let version = load_jar_version(args.jar.version_data.as_deref(), &mut jar, &checker)?;
-    let positions = version.positions();
-    println!("Font support level {}", version.name);
-    let info = build_jar_info(
-        &launcher.asset_index,
-        jar,
-        version,
-        &args.generic_args.cache,
-    )?;
-    let mut stack =
-        storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
-    let missing_glyph = info.version.supports_missing_glyph().then(missing_glyph);
-    let identifier = &args.font_args.font_info.identifier;
-    let Some(providers) = versions::get_providers(
-        &info.version,
-        &mut stack,
-        identifier.clone(),
-        &args.font_args,
-    )?
-    else {
-        return Err(CommandError::NoProviders);
-    };
-    println!("Generating {}", identifier);
-    let name = get_name(&args.font_args.font_info);
-    let created = get_created(&args.font_args.font_info);
-    for style in &args.generate_args.styles {
-        let style_info = style.info();
-        let ttf_name = format!(
-            "{}-{}.ttf",
-            name.replace(' ', ""),
-            style_info.name.replace(' ', "")
-        );
-        let out_file = args.generate_args.output.join(ttf_name);
-        generate_font(
-            &style_info,
-            &providers,
-            &positions,
-            missing_glyph.as_ref(),
-            name.clone(),
-            created,
-            args.font_args.font_info.font_modified,
-            &out_file,
-        )?;
-    }
-    Ok(())
 }
 
 fn missing_glyph() -> Bitmap {
@@ -458,7 +410,7 @@ impl SummaryChangeReport {
 
 type HistoryTrack = HashMap<providers::Identifier, Vec<(String, ProviderGlyphSummary)>>;
 
-fn vanilla_history(args: &cli::VanillaHistoryArgs) -> Result<(), CommandError> {
+fn run_history(args: &cli::HistoryArgs) -> Result<(), CommandError> {
     let checker = version_checker();
     let manifest = cache::get_manifest(&args.generic_args.cache)?;
     let mut history = HistoryTrack::new();
@@ -489,18 +441,17 @@ fn vanilla_history(args: &cli::VanillaHistoryArgs) -> Result<(), CommandError> {
                     Box::new(info.jar_store),
                     Box::new(info.asset_store),
                 ]);
-                let identifier = &args.font_args.font_info.identifier;
                 let providers = versions::get_providers(
                     &info.version,
                     &mut stack,
-                    identifier.clone(),
+                    args.identifier.clone(),
                     &args.font_args,
                 )?;
                 if let Some(providers) = providers {
                     vanilla_history_entry(
                         providers.providers,
                         &mut history,
-                        identifier,
+                        &args.identifier,
                         &mversion.id,
                         &info.version.name,
                     );
@@ -511,11 +462,42 @@ fn vanilla_history(args: &cli::VanillaHistoryArgs) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn vanilla_version(args: &cli::VanillaVersionArgs) -> Result<(), CommandError> {
+fn run_export_version(args: &cli::ExportVersionArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let (mut jar, _) = load_jar_source(&args.jar.source(), &args.generic_args.cache)?;
+    let (mut jar, _) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
     let version = versions::detect_version(&checker, &mut jar)?;
     let text = serde_json::to_string(&version)?;
+    std::fs::write(&args.output, text)?;
+    Ok(())
+}
+
+fn run_export_font(args: &cli::ExportFontArgs) -> Result<(), CommandError> {
+    let checker = version_checker();
+    let (mut jar, launcher) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
+    let version = load_jar_version(args.jar_args.version_data.as_deref(), &mut jar, &checker)?;
+    let info = build_jar_info(
+        &launcher.asset_index,
+        jar,
+        version,
+        &args.generic_args.cache,
+    )?;
+    let mut storage_vec: Vec<Box<dyn storage::Storage>> =
+        vec![Box::new(info.jar_store), Box::new(info.asset_store)];
+    for pack in &args.jar_args.packs {
+        let pack_storage = get_storage(pack)?;
+        storage_vec.push(pack_storage);
+    }
+    let mut stack = storage::StackStorage(storage_vec);
+    let Some(providers) = versions::get_providers(
+        &info.version,
+        &mut stack,
+        args.identifier.clone(),
+        &args.font_args,
+    )?
+    else {
+        return Err(CommandError::NoProviders);
+    };
+    let text = serde_json::to_string(&providers)?;
     std::fs::write(&args.output, text)?;
     Ok(())
 }
@@ -575,21 +557,16 @@ fn print_changes(changes: &SummaryChangeReport) {
     }
 }
 
-fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
+fn run_generate(args: &cli::GenerateArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let (mut jar, launcher) =
-        load_jar_source(&args.pack_args.jar.source(), &args.generic_args.cache)?;
+    let (mut jar, launcher) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
     println!(
         "Generating font {} from {} resource packs on Minecraft {}",
-        args.font_args.font_info.identifier,
-        args.pack_args.packs.len(),
+        args.identifier,
+        args.jar_args.packs.len(),
         launcher.id
     );
-    let version = load_jar_version(
-        args.pack_args.jar.version_data.as_deref(),
-        &mut jar,
-        &checker,
-    )?;
+    let version = load_jar_version(args.jar_args.version_data.as_deref(), &mut jar, &checker)?;
     let positions = version.positions();
     println!("Font support level {}", version.name);
     let info = build_jar_info(
@@ -600,32 +577,31 @@ fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
     )?;
     let mut storage_vec: Vec<Box<dyn storage::Storage>> =
         vec![Box::new(info.jar_store), Box::new(info.asset_store)];
-    for pack in &args.pack_args.packs {
+    for pack in &args.jar_args.packs {
         let pack_storage = get_storage(pack)?;
         storage_vec.push(pack_storage);
     }
     let mut stack = storage::StackStorage(storage_vec);
     let missing_glyph = info.version.supports_missing_glyph().then(missing_glyph);
-    let identifier = &args.font_args.font_info.identifier;
     let Some(providers) = versions::get_providers(
         &info.version,
         &mut stack,
-        identifier.clone(),
+        args.identifier.clone(),
         &args.font_args,
     )?
     else {
         return Err(CommandError::NoProviders);
     };
-    let name = get_name(&args.font_args.font_info);
-    let created = get_created(&args.font_args.font_info);
-    for style in &args.generate_args.styles {
+    let name = get_name(&args.meta_args, &args.identifier);
+    let created = get_created(&args.meta_args, &args.identifier);
+    for style in &args.styles {
         let style_info = style.info();
         let ttf_name = format!(
             "{}-{}.ttf",
             name.replace(' ', ""),
             style_info.name.replace(' ', "")
         );
-        let out_file = args.generate_args.output.join(ttf_name);
+        let out_file = args.output.join(ttf_name);
         generate_font(
             &style_info,
             &providers,
@@ -633,27 +609,22 @@ fn pack_generate(args: &cli::PackGenerateArgs) -> Result<(), CommandError> {
             missing_glyph.as_ref(),
             name.clone(),
             created,
-            args.font_args.font_info.font_modified,
+            args.meta_args.font_modified,
             &out_file,
         )?;
     }
     Ok(())
 }
 
-fn pack_list(args: &cli::PackListArgs) -> Result<(), CommandError> {
+fn run_list(args: &cli::ListArgs) -> Result<(), CommandError> {
     let checker = version_checker();
-    let (mut jar, launcher) =
-        load_jar_source(&args.pack_args.jar.source(), &args.generic_args.cache)?;
+    let (mut jar, launcher) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
     println!(
         "Available font identifiers across {} resource packs on Minecraft {}:",
-        args.pack_args.packs.len(),
+        args.jar_args.packs.len(),
         launcher.id
     );
-    let version = load_jar_version(
-        args.pack_args.jar.version_data.as_deref(),
-        &mut jar,
-        &checker,
-    )?;
+    let version = load_jar_version(args.jar_args.version_data.as_deref(), &mut jar, &checker)?;
     let info = build_jar_info(
         &launcher.asset_index,
         jar,
@@ -662,7 +633,7 @@ fn pack_list(args: &cli::PackListArgs) -> Result<(), CommandError> {
     )?;
     let mut storage_vec: Vec<Box<dyn storage::Storage>> =
         vec![Box::new(info.jar_store), Box::new(info.asset_store)];
-    for pack in &args.pack_args.packs {
+    for pack in &args.jar_args.packs {
         let pack_storage = get_storage(pack)?;
         storage_vec.push(pack_storage);
     }
