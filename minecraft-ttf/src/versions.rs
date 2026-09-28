@@ -17,7 +17,7 @@ use crate::{
 pub struct MinecraftVersion {
     pub name: String,
     providers: ProviderSupport,
-    hardcoded_spaces: Option<BTreeMap<char, f32>>,
+    hardcoded_spaces: BTreeMap<char, f32>,
     auto_advance: providers::AutoAdvance,
     pub asset_mount: PathBuf,
 }
@@ -29,7 +29,7 @@ impl Default for MinecraftVersion {
             providers: ProviderSupport::Hardcoded(Box::new(HardcodedFont {
                 chars: CharSource::Hardcoded(ndarray::Array2::default((0, 0))),
                 textures: Default::default(),
-                hardcoded_advances: None,
+                hardcoded_advances: Default::default(),
                 unifont: None,
             })),
             hardcoded_spaces: Default::default(),
@@ -104,7 +104,7 @@ enum ProviderSupport {
 struct HardcodedFont {
     chars: CharSource,
     textures: HashMap<providers::Identifier, Option<PathBuf>>,
-    hardcoded_advances: Option<HashMap<char, f32>>,
+    hardcoded_advances: HashMap<char, f32>,
     unifont: Option<LegacyUnifont>,
 }
 
@@ -225,13 +225,19 @@ impl VersionCheck {
 #[serde(rename_all = "snake_case")]
 enum VersionChange {
     AddTextures(HashMap<providers::Identifier, Option<PathBuf>>),
-    HardcodedSpaces(Option<BTreeMap<char, f32>>),
+    HardcodedSpaces(BTreeMap<char, f32>),
     SetChars(SetCharChange),
-    ZeroAdvances(Option<String>),
+    SpecialAdvances(Vec<SpecialAdvance>),
     AutoAdvance(providers::AutoAdvance),
     Unifont(LegacyUnifont),
     AssetMount(PathBuf),
     Providers(providers::ProviderBehavior),
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct SpecialAdvance {
+    advance: f32,
+    chars: String,
 }
 
 impl VersionChange {
@@ -277,11 +283,15 @@ impl VersionChange {
                     }
                 }
             }
-            Self::ZeroAdvances(data) => {
+            Self::SpecialAdvances(data) => {
                 let legacy = &mut Self::get_legacy(version);
-                legacy.hardcoded_advances = data
-                    .as_ref()
-                    .map(|string| string.chars().map(|x| (x, 0.0)).collect());
+                let mut map = HashMap::new();
+                for entry in data {
+                    for char in entry.chars.chars() {
+                        map.insert(char, entry.advance);
+                    }
+                }
+                legacy.hardcoded_advances = map;
             }
             Self::AutoAdvance(advance) => {
                 version.auto_advance = *advance;
@@ -386,9 +396,9 @@ pub fn get_providers(
 ) -> Result<Option<providers::Providers>, providers::ProvidersError> {
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
-    if let Some(spaces) = &version.hardcoded_spaces {
+    if !version.hardcoded_spaces.is_empty() {
         let provider = providers::SpaceProvider {
-            chars: spaces.clone(),
+            chars: version.hardcoded_spaces.clone(),
         };
         providers.push(providers::Provider::Space(provider));
     }
@@ -423,7 +433,7 @@ pub fn get_providers(
                     store,
                     texture,
                     chars,
-                    hardcoded_advances.as_ref().unwrap_or(&HashMap::new()),
+                    hardcoded_advances,
                     version.auto_advance,
                     options,
                 )?;
