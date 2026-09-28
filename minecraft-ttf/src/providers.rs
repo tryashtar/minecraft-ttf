@@ -73,6 +73,7 @@ pub struct CharImage {
 pub struct ImageProvider {
     #[serde(skip)]
     pub image: image::DynamicImage,
+    pub image_path: PathBuf,
     pub has_color: bool,
     pub height: i32,
     pub ascent: i32,
@@ -693,6 +694,7 @@ fn convert_bitmap_provider(
         .collect();
     let full = ImageProvider {
         image: img_data.data,
+        image_path: img_entry,
         has_color,
         height,
         ascent: bitmap.ascent,
@@ -904,7 +906,14 @@ pub fn legacy_unicode<'a>(
             Ok(data) => data,
         };
         times.update(img_data.modified_time);
-        let full = convert_unicode(img_data.data, options, chars, &size_dict, uneven)?;
+        let full = convert_unicode(
+            img_data.data,
+            sheet_path.clone(),
+            options,
+            chars,
+            &size_dict,
+            uneven,
+        )?;
         result.push(full);
     }
     Ok((result, times))
@@ -912,6 +921,7 @@ pub fn legacy_unicode<'a>(
 
 fn convert_unicode(
     image: image::DynamicImage,
+    path: PathBuf,
     options: &impl ProviderOptions,
     grid: &ndarray::Array2<Option<char>>,
     sizes: &HashMap<char, (u32, u32)>,
@@ -942,6 +952,7 @@ fn convert_unicode(
         .collect();
     let full = ImageProvider {
         image,
+        image_path: path,
         has_color,
         height: 8,
         ascent: 7,

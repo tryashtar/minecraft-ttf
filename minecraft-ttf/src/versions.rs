@@ -562,6 +562,7 @@ fn legacy_bitmap(
         .collect();
     let provider = providers::ImageProvider {
         image: image.data,
+        image_path: texture.to_owned(),
         has_color,
         height,
         ascent: 7,
