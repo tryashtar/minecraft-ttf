@@ -421,43 +421,47 @@ fn run_history(args: &cli::HistoryArgs) -> Result<(), CommandError> {
         .skip_while(|x| args.from.as_ref().is_some_and(|y| &x.id != y))
         .take_while(|x| args.to.as_ref().is_none_or(|y| &x.id != y));
     for mversion in versions {
-        let launcher_data = cache::get_launcher(mversion, &args.generic_args.cache)?;
-        let mut jar = cache::get_jar(&launcher_data, &args.generic_args.cache)?;
-        let version = versions::detect_version(&checker, &mut jar)?;
-        match build_jar_info(
-            &launcher_data.asset_index,
-            jar,
-            version,
-            &args.generic_args.cache,
-        ) {
-            Err(CommandError::Version(versions::VersionError::UnknownVersion)) => {
-                continue;
-            }
-            Err(e) => {
-                return Err(e);
-            }
-            Ok(info) => {
-                let mut stack = storage::StackStorage(vec![
-                    Box::new(info.jar_store),
-                    Box::new(info.asset_store),
-                ]);
-                let providers = versions::get_providers(
-                    &info.version,
-                    &mut stack,
-                    args.identifier.clone(),
-                    &args.font_args,
-                )?;
-                if let Some(providers) = providers {
-                    vanilla_history_entry(
-                        providers.providers,
-                        &mut history,
-                        &args.identifier,
-                        &mversion.id,
-                        &info.version.name,
-                    );
-                }
+        match history_check_version(mversion, &checker, &mut history, args) {
+            Ok(()) => {}
+            Err(err) => {
+                error!("Version {}: {}", mversion.id, err);
             }
         }
+    }
+    Ok(())
+}
+
+fn history_check_version(
+    mversion: &cache::ManifestVersion,
+    checker: &[versions::VersionUpdate],
+    history: &mut HistoryTrack,
+    args: &cli::HistoryArgs,
+) -> Result<(), CommandError> {
+    let launcher_data = cache::get_launcher(mversion, &args.generic_args.cache)?;
+    let mut jar = cache::get_jar(&launcher_data, &args.generic_args.cache)?;
+    let version = versions::detect_version(checker, &mut jar)?;
+    let info = build_jar_info(
+        &launcher_data.asset_index,
+        jar,
+        version,
+        &args.generic_args.cache,
+    )?;
+    let mut stack =
+        storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
+    let providers = versions::get_providers(
+        &info.version,
+        &mut stack,
+        args.identifier.clone(),
+        &args.font_args,
+    )?;
+    if let Some(providers) = providers {
+        vanilla_history_entry(
+            providers.providers,
+            history,
+            &args.identifier,
+            &mversion.id,
+            &info.version.name,
+        );
     }
     Ok(())
 }

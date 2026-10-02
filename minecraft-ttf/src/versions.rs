@@ -129,6 +129,38 @@ pub enum CharSource {
     Hardcoded(ndarray::Array2<Option<char>>),
 }
 
+impl CharSource {
+    fn get<'a>(
+        &'a self,
+        store: &mut impl storage::Storage,
+    ) -> Result<
+        (
+            maybe_owned::MaybeOwned<'a, ndarray::Array2<Option<char>>>,
+            providers::ModifiedTimes,
+        ),
+        providers::ProvidersError,
+    > {
+        let mut times = providers::ModifiedTimes::default();
+        match self {
+            Self::FromFile(path) => {
+                let lines = storage::read_font_txt(store, path)?;
+                times.update(lines.modified_time);
+                let content = split_grid(lines.data.iter(), false)?;
+                let mut array = ndarray::Array2::from_elem((2, content.ncols()), None);
+                array
+                    .append(ndarray::Axis(0), content.view())
+                    .expect("Shape matches");
+                let blank_rows = ndarray::Array2::from_elem((5, array.ncols()), None);
+                array
+                    .append(ndarray::Axis(0), blank_rows.view())
+                    .expect("Shape matches");
+                Ok((maybe_owned::MaybeOwned::Owned(array), times))
+            }
+            Self::Hardcoded(array) => Ok((maybe_owned::MaybeOwned::Borrowed(array), times)),
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ProviderSupport {
@@ -513,25 +545,10 @@ fn legacy_bitmap(
     let mut times = providers::ModifiedTimes::default();
     let image = storage::read_image(store, texture)?;
     times.update(image.modified_time);
-    let char_images = match chars {
-        CharSource::FromFile(path) => {
-            let lines = storage::read_font_txt(store, path)?;
-            times.update(lines.modified_time);
-            let content = split_grid(lines.data.iter(), false)?;
-            let mut array = ndarray::Array2::from_elem((2, content.ncols()), None);
-            array
-                .append(ndarray::Axis(0), content.view())
-                .expect("Shape matches");
-            let blank_rows = ndarray::Array2::from_elem((5, array.ncols()), None);
-            array
-                .append(ndarray::Axis(0), blank_rows.view())
-                .expect("Shape matches");
-            providers::image_grid(&image.data, &array, None, |x| options.include_char(x))
-        }
-        CharSource::Hardcoded(array) => {
-            providers::image_grid(&image.data, array, None, |x| options.include_char(x))
-        }
-    };
+    let (char_grid, more_times) = chars.get(store)?;
+    times.merge(more_times);
+    let char_images =
+        providers::image_grid(&image.data, &char_grid, None, |x| options.include_char(x));
     let height = 8i32;
     let char_advance = |char: char, bitmap: &Bitmap| -> f32 {
         match advances.get(&char) {

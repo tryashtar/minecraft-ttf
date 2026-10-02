@@ -1670,6 +1670,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "maybe-owned"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
+
+[[package]]
 name = "maybe-rayon"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1703,6 +1709,7 @@ dependencies = [
  "indexmap 2.14.1",
  "jiff",
  "json5",
+ "maybe-owned",
  "ndarray",
  "num",
  "num-traits",
