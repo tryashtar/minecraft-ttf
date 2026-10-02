@@ -544,15 +544,12 @@ pub enum ForceUniformBehavior {
     SwitchIdentifier,
 }
 
-pub fn load_providers(
-    identifier: Identifier,
-    store: &mut storage::StackStorage,
-    advance: AutoAdvance,
+fn font_entry(
+    identifier: &Identifier,
     options: &impl ProviderOptions,
     behavior: &ProviderBehavior,
-    seen: &mut HashSet<Identifier>,
-) -> Result<Option<Providers>, ProvidersError> {
-    let entry = if options.option_uniform()
+) -> PathBuf {
+    if options.option_uniform()
         && let ForceUniformBehavior::SwitchIdentifier = behavior.uniform
         && identifier.namespace == "minecraft"
         && identifier.body == Path::new("default")
@@ -564,7 +561,18 @@ pub fn load_providers(
         uniform.to_entry(Some("font"), Some("json"))
     } else {
         identifier.to_entry(Some("font"), Some("json"))
-    };
+    }
+}
+
+pub fn load_providers(
+    identifier: Identifier,
+    store: &mut storage::StackStorage,
+    advance: AutoAdvance,
+    options: &impl ProviderOptions,
+    behavior: &ProviderBehavior,
+    seen: &mut HashSet<Identifier>,
+) -> Result<Option<Providers>, ProvidersError> {
+    let entry = font_entry(&identifier, options, behavior);
     seen.insert(identifier);
     match read_stacked_providers(store, &entry) {
         Err(storage::StorageError::FileNotFound(_)) => Ok(None),
@@ -866,20 +874,8 @@ pub fn unicode_sheets(
     result
 }
 
-pub fn legacy_unicode<'a>(
-    store: &mut impl storage::Storage,
-    options: &impl ProviderOptions,
-    uneven: bool,
-    sheets: impl Iterator<Item = (&'a ndarray::Array2<Option<char>>, &'a PathBuf)>,
-    sizes: &Path,
-) -> Result<(Vec<ImageProvider>, ModifiedTimes), ProvidersError> {
-    let mut result = vec![];
-    let mut times = ModifiedTimes::default();
-    let size_time = store.modified_time(sizes)?;
-    times.update(size_time);
-    let size_bytes = store.read(sizes)?;
-    let size_dict: HashMap<char, (u32, u32)> = size_bytes
-        .into_iter()
+fn glyph_sizes(size_bytes: impl Iterator<Item = u8>) -> HashMap<char, (u32, u32)> {
+    size_bytes
         .zip(0u32..)
         .filter_map(|(byte, char)| {
             if byte > 0 {
@@ -894,7 +890,22 @@ pub fn legacy_unicode<'a>(
                 (((byte >> 4) & 0xf).into(), ((byte & 0xf) + 1).into()),
             )
         })
-        .collect();
+        .collect()
+}
+
+pub fn legacy_unicode<'a>(
+    store: &mut impl storage::Storage,
+    options: &impl ProviderOptions,
+    uneven: bool,
+    sheets: impl Iterator<Item = (&'a ndarray::Array2<Option<char>>, &'a PathBuf)>,
+    sizes: &Path,
+) -> Result<(Vec<ImageProvider>, ModifiedTimes), ProvidersError> {
+    let mut result = vec![];
+    let mut times = ModifiedTimes::default();
+    let size_time = store.modified_time(sizes)?;
+    times.update(size_time);
+    let size_bytes = store.read(sizes)?;
+    let size_dict = glyph_sizes(size_bytes.into_iter());
     for (chars, sheet_path) in sheets {
         let img_data = match storage::read_image(store, sheet_path) {
             Err(storage::StorageError::FileNotFound(_)) => {

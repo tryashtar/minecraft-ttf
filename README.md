@@ -35,7 +35,7 @@ There are five operations that the script can perform. You can use `--help` on a
 |`list`|Print a list of font identifiers available. You can pass any of these to `generate`.|
 |`history`|Download *every* version of Minecraft, and print information whenever an update made any changes to the font. This takes a while and downloads a lot of stuff. You can use `--from` and `--to` to define a range of versions to download.|
 |`export version`|Export JSON information that was autodetected from the specified jar.|
-|`export font`|Export JSON information about a font.|
+|`export providers`|Export JSON information about a font's providers.|
 
 ### Required Parameters
 |Option|Description|

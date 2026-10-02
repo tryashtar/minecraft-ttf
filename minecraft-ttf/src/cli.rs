@@ -73,8 +73,8 @@ pub struct HistoryArgs {
 pub enum ExportCommand {
     /// Export information about a specific version
     Version(ExportVersionArgs),
-    /// Export information about a font
-    Font(ExportFontArgs),
+    /// Export information about a font's providers
+    Providers(ExportProvidersArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -89,12 +89,12 @@ pub struct ExportVersionArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ExportFontArgs {
+pub struct ExportProvidersArgs {
     /// Identifier of the font definition
     #[arg(long)]
     pub identifier: providers::Identifier,
     /// File to save the information to
-    #[arg(long, default_value = "font.json")]
+    #[arg(long, default_value = "providers.json")]
     pub output: PathBuf,
     #[command(flatten)]
     pub jar_args: JarArgs,

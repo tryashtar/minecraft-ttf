@@ -84,7 +84,7 @@ fn run(command: cli::Command) -> Result<(), CommandError> {
         cli::Command::History(args) => run_history(&args),
         cli::Command::List(args) => run_list(&args),
         cli::Command::Export(cli::ExportCommand::Version(args)) => run_export_version(&args),
-        cli::Command::Export(cli::ExportCommand::Font(args)) => run_export_font(&args),
+        cli::Command::Export(cli::ExportCommand::Providers(args)) => run_export_providers(&args),
     }
 }
 
@@ -475,7 +475,7 @@ fn run_export_version(args: &cli::ExportVersionArgs) -> Result<(), CommandError>
     Ok(())
 }
 
-fn run_export_font(args: &cli::ExportFontArgs) -> Result<(), CommandError> {
+fn run_export_providers(args: &cli::ExportProvidersArgs) -> Result<(), CommandError> {
     let checker = version_checker();
     let (mut jar, launcher) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
     let version = load_jar_version(args.jar_args.version_data.as_deref(), &mut jar, &checker)?;
