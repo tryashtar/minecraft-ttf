@@ -85,7 +85,7 @@ fn run(command: cli::Command) -> Result<(), CommandError> {
         cli::Command::List(args) => run_list(&args),
         cli::Command::Export(cli::ExportCommand::Version(args)) => run_export_version(&args),
         cli::Command::Export(cli::ExportCommand::Providers(args)) => run_export_providers(&args),
-        cli::Command::Export(cli::ExportCommand::Images(args)) => run_images_providers(&args),
+        cli::Command::Export(cli::ExportCommand::Images(args)) => run_export_images(&args),
     }
 }
 
@@ -521,10 +521,11 @@ struct ExportSheetGrid {
     image_path: PathBuf,
     image_width: u32,
     image_height: u32,
+    advance: providers::AdvanceStrategy,
     cells: ndarray::Array2<ExportGridCell>,
 }
 
-fn run_images_providers(args: &cli::ExportImagesArgs) -> Result<(), CommandError> {
+fn run_export_images(args: &cli::ExportImagesArgs) -> Result<(), CommandError> {
     let checker = version_checker();
     let (mut jar, launcher) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
     let version = load_jar_version(args.jar_args.version_data.as_deref(), &mut jar, &checker)?;
@@ -585,6 +586,7 @@ fn run_images_providers(args: &cli::ExportImagesArgs) -> Result<(), CommandError
                 image_path: grid.image_path,
                 image_width: image.data.width(),
                 image_height: image.data.height(),
+                advance: grid.advance,
                 cells,
             };
             result.push(entry);

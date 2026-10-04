@@ -12,7 +12,7 @@ use bitmap_ttf::bitmap::{Bitmap, Rectangle};
 use image::GenericImageView;
 use tracing::{Level, debug, span};
 
-use crate::{cache, providers::GridCell::SkippedChar, storage};
+use crate::{cache, storage};
 
 pub fn serialize_rectangle<S>(rectangle: &Rectangle, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -361,16 +361,13 @@ impl PartialProviders {
         options: &impl ProviderOptions,
     ) -> Result<Providers, ProvidersError> {
         let mut providers = vec![];
-        let mut times = ModifiedTimes::default();
+        let mut times = self.times;
         for provider in self.providers {
             let (mapped, extra_times) = provider.resolve(store, options)?;
             times.merge(extra_times);
             providers.push(mapped);
         }
-        Ok(Providers {
-            providers,
-            times: self.times,
-        })
+        Ok(Providers { providers, times })
     }
 }
 
@@ -443,7 +440,7 @@ pub fn image_grid(
         let (char, size) = match cell {
             GridCell::FullSizeChar(char) => (char, None),
             GridCell::SizedChar(char, (l, r)) => (char, Some((*l, *r))),
-            SkippedChar(_) | GridCell::Empty => {
+            GridCell::SkippedChar(_) | GridCell::Empty => {
                 continue;
             }
         };
@@ -532,7 +529,7 @@ fn passes_filter(options: &impl ProviderOptions, filter: &JsonProviderFilter) ->
     true
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct AdvanceStrategy {
     pub specific: BTreeMap<char, f32>,
     pub auto: AutoAdvance,
@@ -998,7 +995,8 @@ pub fn unicode_sheets(
         let path = template
             .replace("%s", &format!("{:02x}", sheet_id))
             .replace("%S", &format!("{:02X}", sheet_id));
-        result.push((chars, convert(path)));
+        let path = convert(path);
+        result.push((chars, path));
     }
     result
 }
@@ -1035,6 +1033,12 @@ pub fn legacy_unicode(
     let size_bytes = store.read(sizes)?;
     let size_dict = glyph_sizes(size_bytes.into_iter());
     for (chars, image_path) in sheets {
+        if matches!(
+            store.modified_time(&image_path),
+            Err(storage::StorageError::FileNotFound(_))
+        ) {
+            continue;
+        }
         let mapped_chars =
             chars.mapv(|x| GridCell::sized(x, x.and_then(|y| size_dict.get(&y).copied())));
         let full = SheetGrid {
