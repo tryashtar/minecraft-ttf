@@ -5,11 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bitmap_ttf::{
-    bitmap::Bitmap,
-    font::{FontPositions, ScriptPositions},
-};
-use tracing::debug;
+use bitmap_ttf::font::{FontPositions, ScriptPositions};
 
 use crate::{
     providers::{self, split_grid},
@@ -130,16 +126,11 @@ pub enum CharSource {
 }
 
 impl CharSource {
-    fn get<'a>(
-        &'a self,
+    fn get(
+        &self,
         store: &mut impl storage::Storage,
-    ) -> Result<
-        (
-            maybe_owned::MaybeOwned<'a, ndarray::Array2<Option<char>>>,
-            providers::ModifiedTimes,
-        ),
-        providers::ProvidersError,
-    > {
+    ) -> Result<(ndarray::Array2<Option<char>>, providers::ModifiedTimes), providers::ProvidersError>
+    {
         let mut times = providers::ModifiedTimes::default();
         match self {
             Self::FromFile(path) => {
@@ -154,9 +145,9 @@ impl CharSource {
                 array
                     .append(ndarray::Axis(0), blank_rows.view())
                     .expect("Shape matches");
-                Ok((maybe_owned::MaybeOwned::Owned(array), times))
+                Ok((array, times))
             }
-            Self::Hardcoded(array) => Ok((maybe_owned::MaybeOwned::Borrowed(array), times)),
+            Self::Hardcoded(array) => Ok((array.clone(), times)),
         }
     }
 }
@@ -460,23 +451,23 @@ impl HardcodedCharsBuilder {
     }
 }
 
-pub fn get_providers(
+pub fn get_partial_providers(
     version: &MinecraftVersion,
     store: &mut storage::StackStorage,
     identifier: providers::Identifier,
     options: &impl providers::ProviderOptions,
-) -> Result<Option<providers::Providers>, providers::ProvidersError> {
+) -> Result<Option<providers::PartialProviders>, providers::ProvidersError> {
     let mut providers = vec![];
     let mut times = providers::ModifiedTimes::default();
     if !version.hardcoded_spaces.is_empty() {
         let provider = providers::SpaceProvider {
             chars: version.hardcoded_spaces.clone(),
         };
-        providers.push(providers::Provider::Space(provider));
+        providers.push(providers::PartialProvider::Space(provider));
     }
     match &version.providers {
         ProviderSupport::Supported(behavior) => {
-            let Some(real) = providers::load_providers(
+            let Some(real) = providers::load_partial_providers(
                 identifier,
                 store,
                 version.auto_advance,
@@ -501,16 +492,21 @@ pub fn get_providers(
                 return Ok(None);
             };
             if let Some(texture) = texture {
-                let (provider, subtimes) = legacy_bitmap(
-                    store,
-                    texture,
-                    chars,
-                    hardcoded_advances,
-                    version.auto_advance,
-                    options,
-                )?;
-                times.merge(subtimes);
-                providers.push(providers::Provider::Image(provider));
+                let (char_grid, more_times) = chars.get(store)?;
+                times.merge(more_times);
+                let sheet = providers::SheetGrid {
+                    image_path: texture.to_owned(),
+                    chars: char_grid.mapv(providers::GridCell::full),
+                    height: 8,
+                    ascent: 7,
+                    bold_offset: 1.0,
+                    is_unifont: false,
+                    advance: providers::AdvanceStrategy {
+                        specific: hardcoded_advances.clone(),
+                        auto: version.auto_advance,
+                    },
+                };
+                providers.push(providers::PartialProvider::Image(sheet));
             }
             if let Some(LegacyUnifont {
                 template,
@@ -519,71 +515,12 @@ pub fn get_providers(
             }) = unifont
             {
                 let sheets = providers::unicode_sheets(template, PathBuf::from);
-                let (many, subtimes) = providers::legacy_unicode(
-                    store,
-                    options,
-                    *uneven_spacing,
-                    sheets.iter().map(|(a, b)| (a, b)),
-                    sizes,
-                )?;
+                let (many, subtimes) =
+                    providers::legacy_unicode(store, *uneven_spacing, sheets.into_iter(), sizes)?;
                 times.merge(subtimes);
-                providers.extend(many.into_iter().map(providers::Provider::Image));
+                providers.extend(many.into_iter().map(providers::PartialProvider::Image));
             }
         }
     }
-    Ok(Some(providers::Providers { providers, times }))
-}
-
-fn legacy_bitmap(
-    store: &mut impl storage::Storage,
-    texture: &Path,
-    chars: &CharSource,
-    advances: &BTreeMap<char, f32>,
-    auto_advances: providers::AutoAdvance,
-    options: &impl providers::ProviderOptions,
-) -> Result<(providers::ImageProvider, providers::ModifiedTimes), providers::ProvidersError> {
-    let mut times = providers::ModifiedTimes::default();
-    let image = storage::read_image(store, texture)?;
-    times.update(image.modified_time);
-    let (char_grid, more_times) = chars.get(store)?;
-    times.merge(more_times);
-    let char_images =
-        providers::image_grid(&image.data, &char_grid, None, |x| options.include_char(x));
-    let height = 8i32;
-    let char_advance = |char: char, bitmap: &Bitmap| -> f32 {
-        match advances.get(&char) {
-            None => auto_advances.get(bitmap, height),
-            Some(advance) => *advance,
-        }
-    };
-    let has_color = options.has_color(&image.data);
-    let chars = char_images
-        .into_iter()
-        .map(|(char, (content_box, bitmap))| {
-            let advance = char_advance(char, &bitmap);
-            debug!(
-                "{:?} ({:04X}):\n{}\nadvance: {}",
-                char,
-                Into::<u32>::into(char),
-                bitmap,
-                advance
-            );
-            let glyph = providers::CharImage {
-                content_box,
-                bitmap,
-                advance,
-                bold_offset: 1.0,
-            };
-            (char, glyph)
-        })
-        .collect();
-    let provider = providers::ImageProvider {
-        image: image.data,
-        image_path: texture.to_owned(),
-        has_color,
-        height,
-        ascent: 7,
-        chars,
-    };
-    Ok((provider, times))
+    Ok(Some(providers::PartialProviders { providers, times }))
 }

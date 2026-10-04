@@ -75,6 +75,8 @@ pub enum ExportCommand {
     Version(ExportVersionArgs),
     /// Export information about a font's providers
     Providers(ExportProvidersArgs),
+    /// Export information about a font's images
+    Images(ExportImagesArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -96,6 +98,25 @@ pub struct ExportProvidersArgs {
     /// File to save the information to
     #[arg(long, default_value = "providers.json")]
     pub output: PathBuf,
+    #[command(flatten)]
+    pub jar_args: JarArgs,
+    #[command(flatten)]
+    pub font_args: FontArgs,
+    #[command(flatten)]
+    pub generic_args: GenericArgs,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ExportImagesArgs {
+    /// Identifier of the font definition
+    #[arg(long)]
+    pub identifier: providers::Identifier,
+    /// File to save the information to
+    #[arg(long, default_value = "images.json")]
+    pub output: PathBuf,
+    /// Include unifont pages as well as bitmap sheets
+    #[arg(long)]
+    pub include_unifont: bool,
     #[command(flatten)]
     pub jar_args: JarArgs,
     #[command(flatten)]

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::Write,
-    path::Path,
+    path::{Path, PathBuf},
     process::ExitCode,
 };
 
@@ -85,6 +85,7 @@ fn run(command: cli::Command) -> Result<(), CommandError> {
         cli::Command::List(args) => run_list(&args),
         cli::Command::Export(cli::ExportCommand::Version(args)) => run_export_version(&args),
         cli::Command::Export(cli::ExportCommand::Providers(args)) => run_export_providers(&args),
+        cli::Command::Export(cli::ExportCommand::Images(args)) => run_images_providers(&args),
     }
 }
 
@@ -448,13 +449,14 @@ fn history_check_version(
     )?;
     let mut stack =
         storage::StackStorage(vec![Box::new(info.jar_store), Box::new(info.asset_store)]);
-    let providers = versions::get_providers(
+    let providers = versions::get_partial_providers(
         &info.version,
         &mut stack,
         args.identifier.clone(),
         &args.font_args,
     )?;
     if let Some(providers) = providers {
+        let providers = providers.resolve(&mut stack, &args.font_args)?;
         vanilla_history_entry(
             providers.providers,
             history,
@@ -492,7 +494,7 @@ fn run_export_providers(args: &cli::ExportProvidersArgs) -> Result<(), CommandEr
         storage_vec.push(pack_storage);
     }
     let mut stack = storage::StackStorage(storage_vec);
-    let Some(providers) = versions::get_providers(
+    let Some(providers) = versions::get_partial_providers(
         &info.version,
         &mut stack,
         args.identifier.clone(),
@@ -501,7 +503,94 @@ fn run_export_providers(args: &cli::ExportProvidersArgs) -> Result<(), CommandEr
     else {
         return Err(CommandError::NoProviders);
     };
+    let providers = providers.resolve(&mut stack, &args.font_args)?;
     let text = serde_json::to_string(&providers)?;
+    std::fs::write(&args.output, text)?;
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ExportGridCell {
+    char: Option<char>,
+    #[serde(serialize_with = "providers::serialize_bitmap")]
+    bitmap: Bitmap,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ExportSheetGrid {
+    image_path: PathBuf,
+    image_width: u32,
+    image_height: u32,
+    cells: ndarray::Array2<ExportGridCell>,
+}
+
+fn run_images_providers(args: &cli::ExportImagesArgs) -> Result<(), CommandError> {
+    let checker = version_checker();
+    let (mut jar, launcher) = load_jar_source(&args.jar_args.source(), &args.generic_args.cache)?;
+    let version = load_jar_version(args.jar_args.version_data.as_deref(), &mut jar, &checker)?;
+    let info = build_jar_info(
+        &launcher.asset_index,
+        jar,
+        version,
+        &args.generic_args.cache,
+    )?;
+    let mut storage_vec: Vec<Box<dyn storage::Storage>> =
+        vec![Box::new(info.jar_store), Box::new(info.asset_store)];
+    for pack in &args.jar_args.packs {
+        let pack_storage = get_storage(pack)?;
+        storage_vec.push(pack_storage);
+    }
+    let mut stack = storage::StackStorage(storage_vec);
+    let Some(providers) = versions::get_partial_providers(
+        &info.version,
+        &mut stack,
+        args.identifier.clone(),
+        &args.font_args,
+    )?
+    else {
+        return Err(CommandError::NoProviders);
+    };
+    let mut result = vec![];
+    for provider in providers.providers {
+        if let providers::PartialProvider::Image(grid) = provider {
+            if grid.is_unifont && !args.include_unifont {
+                continue;
+            }
+            let image = storage::read_image(&mut stack, &grid.image_path)?;
+            let rows = grid.chars.nrows();
+            let columns = grid.chars.ncols();
+            let mut vec = vec![];
+            for ((row, column), cell) in grid.chars.indexed_iter() {
+                let char = match cell {
+                    providers::GridCell::FullSizeChar(char) => Some(char),
+                    providers::GridCell::SizedChar(char, _) => Some(char),
+                    providers::GridCell::SkippedChar(char) => Some(char),
+                    providers::GridCell::Empty => None,
+                }
+                .copied();
+                let (_, bitmap) = providers::cell_bitmap(
+                    &image.data,
+                    rows as u32,
+                    columns as u32,
+                    row,
+                    column,
+                    None,
+                );
+                let cell = ExportGridCell { char, bitmap };
+                vec.push(cell);
+            }
+            let cells =
+                ndarray::Array2::from_shape_vec((rows, columns), vec).expect("Matching shape");
+            let entry = ExportSheetGrid {
+                image_path: grid.image_path,
+                image_width: image.data.width(),
+                image_height: image.data.height(),
+                cells,
+            };
+            result.push(entry);
+        }
+    }
+    let text = serde_json::to_string(&result)?;
     std::fs::write(&args.output, text)?;
     Ok(())
 }
@@ -587,7 +676,7 @@ fn run_generate(args: &cli::GenerateArgs) -> Result<(), CommandError> {
     }
     let mut stack = storage::StackStorage(storage_vec);
     let missing_glyph = info.version.supports_missing_glyph().then(missing_glyph);
-    let Some(providers) = versions::get_providers(
+    let Some(providers) = versions::get_partial_providers(
         &info.version,
         &mut stack,
         args.identifier.clone(),
@@ -596,6 +685,7 @@ fn run_generate(args: &cli::GenerateArgs) -> Result<(), CommandError> {
     else {
         return Err(CommandError::NoProviders);
     };
+    let providers = providers.resolve(&mut stack, &args.font_args)?;
     let name = get_name(&args.meta_args, &args.identifier);
     let created = get_created(&args.meta_args, &args.identifier);
     for style in &args.styles {
