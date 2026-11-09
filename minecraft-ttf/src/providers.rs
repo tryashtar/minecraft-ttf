@@ -14,7 +14,7 @@ use tracing::{Level, debug, span};
 
 use crate::{cache, storage};
 
-fn serialize_rectangle<S>(rectangle: &Rectangle, serializer: S) -> Result<S::Ok, S::Error>
+pub fn serialize_rectangle<S>(rectangle: &Rectangle, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -26,7 +26,7 @@ where
     serde::ser::SerializeStruct::end(state)
 }
 
-fn serialize_bitmap<S>(bitmap: &Bitmap, serializer: S) -> Result<S::Ok, S::Error>
+pub fn serialize_bitmap<S>(bitmap: &Bitmap, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -83,6 +83,108 @@ pub struct ImageProvider {
 #[derive(Debug, serde::Serialize, PartialEq)]
 pub struct SpaceProvider {
     pub chars: BTreeMap<char, f32>,
+}
+
+#[derive(Debug)]
+pub enum GridCell {
+    FullSizeChar(char),
+    SizedChar(char, (u32, u32)),
+    SkippedChar(char),
+    Empty,
+}
+
+impl GridCell {
+    pub fn full(char: Option<char>) -> Self {
+        match char {
+            None => Self::Empty,
+            Some(char) => Self::FullSizeChar(char),
+        }
+    }
+
+    pub fn sized(char: Option<char>, size: Option<(u32, u32)>) -> Self {
+        match char {
+            None => Self::Empty,
+            Some(char) => match size {
+                None => Self::SkippedChar(char),
+                Some(size) => Self::SizedChar(char, size),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SheetGrid {
+    pub image_path: PathBuf,
+    pub chars: ndarray::Array2<GridCell>,
+    pub height: i32,
+    pub ascent: i32,
+    pub bold_offset: f32,
+    pub advance: AdvanceStrategy,
+    pub is_unifont: bool,
+}
+
+impl SheetGrid {
+    fn resolve(
+        self,
+        store: &mut impl storage::Storage,
+        options: &impl ProviderOptions,
+    ) -> Result<(ImageProvider, ModifiedTimes), ProvidersError> {
+        let mut times = ModifiedTimes::default();
+        let image = storage::read_image(store, &self.image_path)?;
+        times.update(image.modified_time);
+        let has_color = options.has_color(&image.data);
+        let char_images = image_grid(&image.data, &self.chars, |x| {
+            options.include_char(x) && (!self.is_unifont || options.include_unifont_char(x))
+        });
+        let chars = char_images
+            .into_iter()
+            .map(|(char, (content_box, bitmap))| {
+                let advance = self.advance.get(char, &bitmap, self.height);
+                let glyph = CharImage {
+                    content_box,
+                    bitmap,
+                    advance,
+                    bold_offset: self.bold_offset,
+                };
+                (char, glyph)
+            })
+            .collect();
+        let provider = ImageProvider {
+            image: image.data,
+            image_path: self.image_path,
+            has_color,
+            height: self.height,
+            ascent: self.ascent,
+            chars,
+        };
+        Ok((provider, times))
+    }
+}
+
+#[derive(Debug)]
+pub enum PartialProvider {
+    Bitmap(BitmapProvider),
+    Image(SheetGrid),
+    Space(SpaceProvider),
+}
+
+impl PartialProvider {
+    fn resolve(
+        self,
+        store: &mut impl storage::Storage,
+        options: &impl ProviderOptions,
+    ) -> Result<(Provider, ModifiedTimes), ProvidersError> {
+        match self {
+            PartialProvider::Bitmap(bitmap) => {
+                Ok((Provider::Bitmap(bitmap), ModifiedTimes::default()))
+            }
+            PartialProvider::Space(space) => Ok((Provider::Space(space), ModifiedTimes::default())),
+            PartialProvider::Image(grid) => {
+                let (provider, times) = grid.resolve(store, options)?;
+                Ok((Provider::Image(provider), times))
+            }
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize, PartialEq)]
@@ -246,6 +348,29 @@ pub struct Providers {
     pub times: ModifiedTimes,
 }
 
+#[derive(Debug)]
+pub struct PartialProviders {
+    pub providers: Vec<PartialProvider>,
+    pub times: ModifiedTimes,
+}
+
+impl PartialProviders {
+    pub fn resolve(
+        self,
+        store: &mut impl storage::Storage,
+        options: &impl ProviderOptions,
+    ) -> Result<Providers, ProvidersError> {
+        let mut providers = vec![];
+        let mut times = self.times;
+        for provider in self.providers {
+            let (mapped, extra_times) = provider.resolve(store, options)?;
+            times.merge(extra_times);
+            providers.push(mapped);
+        }
+        Ok(Providers { providers, times })
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 #[error("Strings were not all the same length")]
 pub struct JaggedArrayError;
@@ -281,41 +406,49 @@ pub enum ProvidersError {
     Unihex(#[from] UnihexError),
 }
 
+pub fn cell_bitmap(
+    image: &image::DynamicImage,
+    rows: u32,
+    columns: u32,
+    row: usize,
+    column: usize,
+    size: Option<(u32, u32)>,
+) -> (Rectangle, Bitmap) {
+    let glyph_width = image.width() / columns;
+    let glyph_height = image.height() / rows;
+    let left = column * (glyph_width as usize);
+    let top = row * (glyph_height as usize);
+    let rectangle = Rectangle {
+        left,
+        top,
+        width: glyph_width as usize,
+        height: glyph_height as usize,
+    };
+    let portion = image_portion(image, &rectangle, size);
+    (rectangle, portion)
+}
+
 pub fn image_grid(
     image: &image::DynamicImage,
-    chars: &ndarray::Array2<Option<char>>,
-    sizes: Option<&HashMap<char, (u32, u32)>>,
+    cells: &ndarray::Array2<GridCell>,
     include: impl Fn(char) -> bool,
 ) -> indexmap::IndexMap<char, (Rectangle, Bitmap)> {
     let mut map = indexmap::IndexMap::new();
-    let glyph_width = image.width() / (chars.ncols() as u32);
-    let glyph_height = image.height() / (chars.nrows() as u32);
-    for ((row, col), char) in chars.indexed_iter() {
-        let Some(char) = char else {
-            continue;
+    let rows = cells.nrows() as u32;
+    let columns = cells.ncols() as u32;
+    for ((row, column), cell) in cells.indexed_iter() {
+        let (char, size) = match cell {
+            GridCell::FullSizeChar(char) => (char, None),
+            GridCell::SizedChar(char, (l, r)) => (char, Some((*l, *r))),
+            GridCell::SkippedChar(_) | GridCell::Empty => {
+                continue;
+            }
         };
         if map.contains_key(char) || !include(*char) {
             continue;
         }
-        let left = col * (glyph_width as usize);
-        let top = row * (glyph_height as usize);
-        let rectangle = Rectangle {
-            left,
-            top,
-            width: glyph_width as usize,
-            height: glyph_height as usize,
-        };
-        let size = match sizes {
-            None => None,
-            Some(sizes) => match sizes.get(char) {
-                None => {
-                    continue;
-                }
-                Some((l, r)) => Some((*l, *r)),
-            },
-        };
-        let portion = image_portion(image, &rectangle, size);
-        map.insert(*char, (rectangle, portion));
+        let data = cell_bitmap(image, rows, columns, row, column, size);
+        map.insert(*char, data);
     }
     map
 }
@@ -396,20 +529,44 @@ fn passes_filter(options: &impl ProviderOptions, filter: &JsonProviderFilter) ->
     true
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct AdvanceStrategy {
+    pub specific: BTreeMap<char, f32>,
+    pub auto: AutoAdvance,
+}
+
+impl AdvanceStrategy {
+    pub fn get(&self, char: char, bitmap: &Bitmap, height: i32) -> f32 {
+        if let Some(advance) = self.specific.get(&char) {
+            return *advance;
+        }
+        self.auto.get(bitmap, height)
+    }
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoAdvance {
     LeftmostEmpty,
     RightmostFilled,
+    EvenUniform,
+    UnevenUniform,
 }
 
 impl AutoAdvance {
     pub fn get(&self, bitmap: &Bitmap, height: i32) -> f32 {
-        let column = match self {
-            Self::LeftmostEmpty => leftmost_empty(bitmap).unwrap_or(bitmap.width() - 1),
-            Self::RightmostFilled => rightmost_filled(bitmap).unwrap_or(0) + 1,
-        };
-        normal_advance(bitmap, height, column)
+        match self {
+            AutoAdvance::LeftmostEmpty => {
+                let column = leftmost_empty(bitmap).unwrap_or(bitmap.width() - 1);
+                normal_advance(bitmap, height, column)
+            }
+            AutoAdvance::RightmostFilled => {
+                let column = rightmost_filled(bitmap).unwrap_or(0) + 1;
+                normal_advance(bitmap, height, column)
+            }
+            AutoAdvance::EvenUniform => even_uniform_advance(bitmap),
+            AutoAdvance::UnevenUniform => uneven_uniform_advance(bitmap),
+        }
     }
 }
 
@@ -564,14 +721,14 @@ fn font_entry(
     }
 }
 
-pub fn load_providers(
+pub fn load_partial_providers(
     identifier: Identifier,
     store: &mut storage::StackStorage,
     advance: AutoAdvance,
     options: &impl ProviderOptions,
     behavior: &ProviderBehavior,
     seen: &mut HashSet<Identifier>,
-) -> Result<Option<Providers>, ProvidersError> {
+) -> Result<Option<PartialProviders>, ProvidersError> {
     let entry = font_entry(&identifier, options, behavior);
     seen.insert(identifier);
     match read_stacked_providers(store, &entry) {
@@ -589,7 +746,7 @@ pub fn load_providers(
                     times.merge(subs.times);
                 }
             }
-            Ok(Some(Providers {
+            Ok(Some(PartialProviders {
                 providers: converted,
                 times,
             }))
@@ -604,29 +761,43 @@ fn convert_provider(
     behavior: &ProviderBehavior,
     provider: JsonProvider,
     seen: &mut HashSet<Identifier>,
-) -> Result<Providers, ProvidersError> {
+) -> Result<PartialProviders, ProvidersError> {
     match provider {
         JsonProvider::Bitmap(bitmap) => {
-            let (result, times) = convert_bitmap_provider(store, options, advance, &bitmap)?;
+            let image_path = bitmap.file.to_entry(Some("textures"), None);
+            let height = bitmap.height.unwrap_or(8);
+            let chars = split_grid(bitmap.chars.iter(), true)?;
+            let sheet = SheetGrid {
+                image_path,
+                chars: chars.mapv(GridCell::full),
+                height,
+                ascent: bitmap.ascent,
+                bold_offset: 1.0,
+                is_unifont: false,
+                advance: AdvanceStrategy {
+                    specific: BTreeMap::new(),
+                    auto: advance,
+                },
+            };
             if options.option_uniform()
                 && let ForceUniformBehavior::SkipBitmaps = behavior.uniform
             {
-                return Ok(Providers {
+                return Ok(PartialProviders {
                     providers: vec![],
                     times: ModifiedTimes::default(),
                 });
             }
-            Ok(Providers {
-                providers: vec![Provider::Image(result)],
-                times,
+            Ok(PartialProviders {
+                providers: vec![PartialProvider::Image(sheet)],
+                times: ModifiedTimes::default(),
             })
         }
         JsonProvider::Space(space) => {
             let full = SpaceProvider {
                 chars: space.advances,
             };
-            Ok(Providers {
-                providers: vec![Provider::Space(full)],
+            Ok(PartialProviders {
+                providers: vec![PartialProvider::Space(full)],
                 times: ModifiedTimes::default(),
             })
         }
@@ -635,8 +806,9 @@ fn convert_provider(
                 return Err(ProvidersError::RecursiveReference);
             }
             let err_entry = reference.id.to_entry(Some("font"), Some("json"));
-            let resolved = load_providers(reference.id, store, advance, options, behavior, seen)?
-                .ok_or(storage::StorageError::FileNotFound(err_entry))?;
+            let resolved =
+                load_partial_providers(reference.id, store, advance, options, behavior, seen)?
+                    .ok_or(storage::StorageError::FileNotFound(err_entry))?;
             Ok(resolved)
         }
         JsonProvider::LegacyUnicode(unicode) => {
@@ -645,70 +817,24 @@ fn convert_provider(
             });
             let (many, times) = legacy_unicode(
                 store,
-                options,
                 behavior.uneven_unifont,
-                sheets.iter().map(|(a, b)| (a, b)),
+                sheets.into_iter(),
                 &unicode.sizes.to_entry(None, None),
             )?;
-            Ok(Providers {
-                providers: many.into_iter().map(Provider::Image).collect(),
+            Ok(PartialProviders {
+                providers: many.into_iter().map(PartialProvider::Image).collect(),
                 times,
             })
         }
         JsonProvider::Unihex(unihex) => {
             let (result, times) =
                 convert_unihex_provider(store, options, behavior.uneven_unifont, &unihex)?;
-            Ok(Providers {
-                providers: vec![Provider::Bitmap(result)],
+            Ok(PartialProviders {
+                providers: vec![PartialProvider::Bitmap(result)],
                 times,
             })
         }
     }
-}
-
-fn convert_bitmap_provider(
-    store: &mut impl storage::Storage,
-    options: &impl ProviderOptions,
-    advance: AutoAdvance,
-    bitmap: &JsonBitmapProvider,
-) -> Result<(ImageProvider, ModifiedTimes), ProvidersError> {
-    let span = span!(
-        Level::DEBUG,
-        "converting bitmap provider",
-        img = %bitmap.file
-    );
-    let _guard = span.enter();
-    let mut times = ModifiedTimes::default();
-    let img_entry = bitmap.file.to_entry(Some("textures"), None);
-    let img_data = storage::read_image(store, &img_entry)?;
-    times.update(img_data.modified_time);
-    let height = bitmap.height.unwrap_or(8);
-    let has_color = options.has_color(&img_data.data);
-    let grid = split_grid(bitmap.chars.iter(), true)?;
-    let char_images = image_grid(&img_data.data, &grid, None, |x| options.include_char(x));
-    let chars = char_images
-        .into_iter()
-        .map(|(char, (content_box, bitmap))| {
-            debug!("{:?} ({:04X}):\n{}", char, Into::<u32>::into(char), bitmap);
-            let advance = advance.get(&bitmap, height);
-            let img = CharImage {
-                content_box,
-                bitmap,
-                advance,
-                bold_offset: 1.0,
-            };
-            (char, img)
-        })
-        .collect();
-    let full = ImageProvider {
-        image: img_data.data,
-        image_path: img_entry,
-        has_color,
-        height,
-        ascent: bitmap.ascent,
-        chars,
-    };
-    Ok((full, times))
 }
 
 fn convert_unihex_provider(
@@ -869,7 +995,8 @@ pub fn unicode_sheets(
         let path = template
             .replace("%s", &format!("{:02x}", sheet_id))
             .replace("%S", &format!("{:02X}", sheet_id));
-        result.push((chars, convert(path)));
+        let path = convert(path);
+        result.push((chars, path));
     }
     result
 }
@@ -893,83 +1020,46 @@ fn glyph_sizes(size_bytes: impl Iterator<Item = u8>) -> HashMap<char, (u32, u32)
         .collect()
 }
 
-pub fn legacy_unicode<'a>(
+pub fn legacy_unicode(
     store: &mut impl storage::Storage,
-    options: &impl ProviderOptions,
     uneven: bool,
-    sheets: impl Iterator<Item = (&'a ndarray::Array2<Option<char>>, &'a PathBuf)>,
+    sheets: impl Iterator<Item = (ndarray::Array2<Option<char>>, PathBuf)>,
     sizes: &Path,
-) -> Result<(Vec<ImageProvider>, ModifiedTimes), ProvidersError> {
+) -> Result<(Vec<SheetGrid>, ModifiedTimes), ProvidersError> {
     let mut result = vec![];
     let mut times = ModifiedTimes::default();
     let size_time = store.modified_time(sizes)?;
     times.update(size_time);
     let size_bytes = store.read(sizes)?;
     let size_dict = glyph_sizes(size_bytes.into_iter());
-    for (chars, sheet_path) in sheets {
-        let img_data = match storage::read_image(store, sheet_path) {
-            Err(storage::StorageError::FileNotFound(_)) => {
-                continue;
-            }
-            Err(err) => {
-                return Err(ProvidersError::Storage(err));
-            }
-            Ok(data) => data,
+    for (chars, image_path) in sheets {
+        if matches!(
+            store.modified_time(&image_path),
+            Err(storage::StorageError::FileNotFound(_))
+        ) {
+            continue;
+        }
+        let mapped_chars =
+            chars.mapv(|x| GridCell::sized(x, x.and_then(|y| size_dict.get(&y).copied())));
+        let full = SheetGrid {
+            chars: mapped_chars,
+            image_path,
+            height: 8,
+            ascent: 7,
+            bold_offset: 0.5,
+            is_unifont: true,
+            advance: AdvanceStrategy {
+                specific: BTreeMap::new(),
+                auto: if uneven {
+                    AutoAdvance::UnevenUniform
+                } else {
+                    AutoAdvance::EvenUniform
+                },
+            },
         };
-        times.update(img_data.modified_time);
-        let full = convert_unicode(
-            img_data.data,
-            sheet_path.clone(),
-            options,
-            chars,
-            &size_dict,
-            uneven,
-        )?;
         result.push(full);
     }
     Ok((result, times))
-}
-
-fn convert_unicode(
-    image: image::DynamicImage,
-    path: PathBuf,
-    options: &impl ProviderOptions,
-    grid: &ndarray::Array2<Option<char>>,
-    sizes: &HashMap<char, (u32, u32)>,
-    uneven: bool,
-) -> Result<ImageProvider, ProvidersError> {
-    let has_color = options.has_color(&image);
-    let char_images = image_grid(&image, grid, Some(sizes), |x| {
-        options.include_char(x) && options.include_unifont_char(x)
-    });
-    let chars = char_images
-        .into_iter()
-        .map(|(char, (content_box, bitmap))| {
-            let advance = if uneven {
-                uneven_uniform_advance(&bitmap)
-            } else {
-                even_uniform_advance(&bitmap)
-            };
-            (
-                char,
-                CharImage {
-                    content_box,
-                    bitmap,
-                    advance,
-                    bold_offset: 0.5,
-                },
-            )
-        })
-        .collect();
-    let full = ImageProvider {
-        image,
-        image_path: path,
-        has_color,
-        height: 8,
-        ascent: 7,
-        chars,
-    };
-    Ok(full)
 }
 
 fn read_stacked_providers(
