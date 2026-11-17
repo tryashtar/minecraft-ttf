@@ -1,7 +1,6 @@
 use std::{
     cmp::{max, min},
     collections::{BTreeMap, HashMap, HashSet},
-    ffi::OsStr,
     fmt::Display,
     io::{BufRead, BufReader, Cursor},
     path::{Path, PathBuf},
@@ -12,7 +11,7 @@ use bitmap_ttf::bitmap::{Bitmap, Rectangle};
 use image::GenericImageView;
 use tracing::{Level, debug, span};
 
-use crate::{cache, storage};
+use crate::storage;
 
 pub fn serialize_rectangle<S>(rectangle: &Rectangle, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -236,8 +235,7 @@ impl Identifier {
         }
         result.push(&self.body);
         if let Some(suffix) = suffix {
-            result = cache::push_path_str(result, OsStr::new("."));
-            result = cache::push_path_str(result, OsStr::new(suffix));
+            result.add_extension(suffix);
         }
         result
     }
@@ -940,7 +938,7 @@ fn unihex_lines(
 ) -> Result<storage::ReadEntry<Vec<String>>, storage::StorageError> {
     for i in 0..zip.len() {
         let file = zip.by_index(i)?;
-        if file.name().ends_with(".hex") {
+        if file.name()?.ends_with(".hex") {
             let time = storage::zip_time(&file).map_err(storage::StorageError::Time)?;
             let lines = BufReader::new(file)
                 .lines()

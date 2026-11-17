@@ -134,16 +134,27 @@ fn translate_glyph(glyph: &mut SimpleGlyph, offset_x: i16, offset_y: i16) {
         .iter()
         .map(|x| {
             x.iter()
-                .map(|CurvePoint { x, y, on_curve }| CurvePoint {
-                    x: *x + offset_x,
-                    y: *y + offset_y,
-                    on_curve: *on_curve,
-                })
+                .map(|point| translate_point(*point, offset_x, offset_y))
                 .collect::<Vec<_>>()
                 .into()
         })
         .collect();
     translate_bbox(&mut glyph.bbox, offset_x, offset_y);
+}
+
+fn translate_point(point: CurvePoint, offset_x: i16, offset_y: i16) -> CurvePoint {
+    let CurvePoint {
+        x,
+        y,
+        on_curve,
+        cubic,
+    } = point;
+    CurvePoint {
+        x: x + offset_x,
+        y: y + offset_y,
+        on_curve,
+        cubic,
+    }
 }
 
 fn translate_bbox(bbox: &mut Bbox, offset_x: i16, offset_y: i16) {

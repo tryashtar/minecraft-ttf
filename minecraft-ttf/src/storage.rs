@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashSet, VecDeque},
     io::Read,
     path::{Path, PathBuf},
@@ -109,7 +110,8 @@ impl<T: std::io::Read + std::io::Seek> Storage for ZipStorage<T> {
     fn get_entries(&self, prefix: &Path) -> Result<HashSet<PathBuf>, StorageError> {
         let mut result = HashSet::new();
         for name in self.zip.file_names() {
-            let path = Path::new(name);
+            let name = name?;
+            let path = Path::new(Cow::as_ref(&name));
             if path.starts_with(prefix) {
                 result.insert(path.to_owned());
             }
@@ -156,8 +158,16 @@ pub fn zip_time(
     let Some(modified) = file.last_modified() else {
         return Ok(None);
     };
-    let civil = jiff::civil::DateTime::try_from(modified)?;
-    let zoned = civil.to_zoned(jiff::tz::TimeZone::unknown())?;
+    let civil = jiff::civil::DateTime::new(
+        modified.year() as i16,
+        modified.month() as i8,
+        modified.day() as i8,
+        modified.hour() as i8,
+        modified.minute() as i8,
+        modified.second() as i8,
+        0,
+    )?;
+    let zoned = civil.to_zoned_datetime(jiff::tz::TimeZone::unknown())?;
     Ok(Some(zoned.timestamp()))
 }
 

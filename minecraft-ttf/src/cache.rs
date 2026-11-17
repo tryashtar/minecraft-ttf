@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    ffi::OsStr,
     fmt::Display,
     io::Read,
     path::{Path, PathBuf},
@@ -87,14 +86,14 @@ pub fn get_launcher(version: &ManifestVersion, cache: &Path) -> Result<LauncherD
     let mut cached_path = cache.join(Path::new("versions"));
     cached_path.push(&version.id);
     cached_path.push(&version.id);
-    let cached_path = push_path_str(cached_path, OsStr::new(".json"));
+    cached_path.add_extension("json");
     read_or_download_json(&cached_path, version.url.clone())
 }
 
 pub fn get_asset_source(index: &LauncherAssets, cache: &Path) -> Result<AssetSource, CacheError> {
     let mut cached_path = cache.join(Path::new("assets/indexes"));
     cached_path.push(&index.id);
-    let cached_path = push_path_str(cached_path, OsStr::new(".json"));
+    cached_path.add_extension("json");
     read_or_download_json(&cached_path, index.url.clone())
 }
 
@@ -105,7 +104,7 @@ pub fn get_jar(
     let mut cached_path = cache.join(Path::new("versions"));
     cached_path.push(&launcher.id);
     cached_path.push(&launcher.id);
-    let cached_path = push_path_str(cached_path, OsStr::new(".jar"));
+    cached_path.add_extension("jar");
     let file = std::fs::File::open(&cached_path);
     match file {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -123,12 +122,6 @@ pub fn get_jar(
         Err(e) => Err(CacheError::Io(e)),
         Ok(file) => Ok(zip::ZipArchive::new(file)?),
     }
-}
-
-pub fn push_path_str(path: PathBuf, str: &OsStr) -> PathBuf {
-    let mut string = path.into_os_string();
-    string.push(str);
-    PathBuf::from(string)
 }
 
 fn read_or_download_bytes(

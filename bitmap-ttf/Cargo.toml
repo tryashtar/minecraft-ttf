@@ -5,11 +5,11 @@ edition = "2024"
 
 [dependencies]
 bitvec = "1.1"
-indexmap = { version = "2.14", features = ["serde"] }
-jiff = { version = "0.2", features = ["serde"] }
+indexmap = "2.14"
+jiff = "1.0"
 num-traits = "0.2"
 petgraph = "0.8"
-read-fonts = "0.43"
+read-fonts = "0.47"
 thiserror = "2.0"
 tracing = "0.1"
-write-fonts = "0.52"
+write-fonts = "0.56"

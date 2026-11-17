@@ -27,7 +27,7 @@ If you use Arch Linux, I have an [AUR package](https://aur.archlinux.org/package
 
 ## Command Line
 
-There are five operations that the script can perform. You can use `--help` on a partial command to see the available options as well.
+You can use `--help` on a partial command to see the available options as well.
 
 |Command|Description|
 |-|-|

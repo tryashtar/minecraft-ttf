@@ -380,6 +380,7 @@ impl TracePen {
             x: xf.to_i16().ok_or(CoordsError::FloatCast)?,
             y: yf.to_i16().ok_or(CoordsError::FloatCast)?,
             on_curve: true,
+            cubic: false,
         })
     }
 
